@@ -1,0 +1,58 @@
+# OPDLM requirements — verified working on H100 nodes with NVIDIA driver
+# CUDA 12.8 (torch built for cu124, run with DS_SKIP_CUDA_CHECK=1 to bypass
+# DeepSpeed's nvcc major.minor mismatch check).
+#
+# Install order (from a fresh conda env):
+#   conda create -n opdlm python=3.10.19 -y
+#   conda activate opdlm
+#   pip install torch==2.6.0+cu124 --index-url https://download.pytorch.org/whl/cu124
+#   pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cu124
+#   pip install flash-attn==2.7.4.post1 --no-build-isolation
+#
+# (flash-attn must be installed AFTER torch with --no-build-isolation; otherwise
+# it tries to install its own torch and the build pulls a wheel that mismatches
+# the env.)
+
+# ── Core ML ──
+torch==2.6.0+cu124
+triton==3.2.0
+flash-attn==2.7.4.post1
+numpy==1.26.4              # vllm 0.8.x in turn pulls numba which caps numpy<2; pinning to 1.26 keeps everyone happy
+scipy==1.15.3
+einops==0.8.2
+
+# ── Hugging Face ──
+transformers==4.52.4
+tokenizers==0.21.4
+safetensors==0.7.0
+datasets==4.6.1
+peft==0.17.1
+accelerate==1.11.0
+huggingface-hub==0.36.2
+sentencepiece==0.2.1
+tiktoken==0.12.0
+
+# ── Training ──
+deepspeed==0.18.0
+bitsandbytes==0.49.2
+liger_kernel==0.7.0
+
+# ── Inference ──
+vllm==0.8.5.post1          # was 0.7.3 in the original spec; bumped because 0.7.3 force-downgrades torch to 2.5.1, breaking the cu124+flash-attn stack
+
+# ── Logging & config ──
+wandb==0.25.0
+omegaconf==2.3.0
+tensorboard==2.20.0
+termcolor==3.3.0
+tqdm==4.67.3
+
+# ── Evaluation ──
+math_verify==0.9.0
+nest_asyncio==1.6.0
+evalplus==0.3.1            # required for HumanEval/MBPP scoring (rl_execute.evaluate_evalplus_dataset shells out to evalplus.sanitize / evalplus.evaluate). Note: pulls protobuf 5.x as a transitive dep.
+
+# ── Dev tools ──
+matplotlib==3.10.8
+gpustat==1.1.1
+ipykernel==7.2.0

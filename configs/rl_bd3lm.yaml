@@ -1,0 +1,172 @@
+wandb:
+  enabled: true
+  project: "diffusion_distillation"  # wandb project name (decoupled from experiment.project)
+  group: null          # wandb group name, set from CLI e.g. group=distill_exp1
+  run_name: bd3lm_kl_distill  # timestamp will be appended automatically
+
+
+
+experiment:
+    project: "rl_bd3lm" # need to be same of this file name
+    port: 29500        # accelerate main_process_port
+    function: "train"  # no need to change
+    start_from_scratch: True # set to True by default, if you stopped the training, and want to keep training with your ckpt model.optimized_name, set to False, and set current_epoch to the last step you stopped
+    total_step: -1  # -1 means train indefinitely until manually stopped
+    stop_RL_step: -1  # manual early-stop cap on RL step counter; -1 = unused. If set (e.g. 150), the main loop exits after that step's save without affecting LR scheduler (which still uses total_step).
+    save_every: 10
+    eval_every: 10
+    current_epoch: 1
+    deepspeed_file:  "1gpu_debug"  # "1gpu_debug" #
+    num_node: 1
+    node_index: 0
+
+model:
+    pretrained_model: "/data484_2/xsu2/traceRL/pretrained_models/BD3LM/Qwen3-0.6B-a2d-init" # student model (BD3LM)
+    teacher_model: "/data484_2/xsu2/traceRL/pretrained_models/Qwen/Qwen3-4B" # teacher model for distillation
+    optimized_name: "optimized" # the output name for your optimized model, will be saved under sft_dream/ckpt
+    model_base: "bd3lm"
+
+
+
+
+dataset:
+    train_dataset: "MATH_train" # "MATH_train""PrimeIntellect"
+    optimization_data: "rl_data" # name of the rollout data output
+    data_type: "math" # "math" "code"
+    skip_code_correctness: True  # True = skip subprocess code test runs during training (KL distillation: reward unused; saves ~5-20s/step on opdlm_train). Math/mc inline checks still run.
+    num_data_epochs: 1  # outer epochs over full training dataset (-1 = random sample each step, >=1 = sequential iteration with reshuffle)
+
+# also see explanations in eval configs
+rollout:
+    tensor_parallel_size: 1 # set to 1 by default, if oom, try reduce max_active first, if still oom, set tensor_parallel_size to 8
+    gpu_memory_utilization: 0.8
+    max_active: 128
+    num_task_per_step: 128
+    num_response_per_task: 1
+    temperature: 1.0
+    max_token: -1
+    block_size: 4
+    denoising_steps_per_block: 4
+    top_p: 1.0
+    top_k: 0
+    remasking_strategy: "low_confidence_dynamic" #"low_confidence_static""low_confidence_dynamic"
+    dynamic_threshold: 0.9 # no use for "low_confidence_static"
+    start_with_think: False
+    base_port: 29000  # base port for multi-GPU rollout workers; also sets JETENGINE_PORT
+    # When True, build training rows by independently random-masking each block of
+    # the clean response (mask ratio ~ Uniform(0,1) per block) instead of sampling
+    # one round per block from the actual rollout trajectory. Yields 1 row per
+    # prompt (same shape as one_state_per_block=True) but the mask pattern is
+    # synthetic. Use to A/B trajectory-based vs MDLM-style random-mask training.
+    random_mask: false
+    # Per-domain cap on max generation tokens. Only applied when a sample carries
+    # a `domain` field (e.g. opdlm_train). Effective per-sample max = min(rollout.max_token, cap).
+    # Absent/missing domain key -> no cap (uses rollout.max_token / schedule as-is).
+    per_domain_max_token:
+      math: 4096
+      code: 2048
+      chat: 2048
+      science: 1024
+
+execute:
+    num_chunk: 128 # batch size of executing codes in coding eval tasks
+
+training:
+    gradient_checkpointing_enable: True
+    gradient_accumulation_steps: 1
+    batch_size_lm: 1
+    mixed_precision: "bf16"
+    enable_tf32: True
+    seed: 10086
+    num_train_epochs: 1
+    max_grad_norm: 1.0
+    method: "TraceRL" # "random_masking" "TraceRL" "coupled"
+    one_state_per_block: False  # TraceRL only: if True, stitch one training row per prompt by independently sampling one denoising round per response block (exploits BD3LM's block-causal factorization — same compute as keeping one round, but uses info from all rounds). If False, keep all rounds.
+    block_size: 4
+    shrink: 1
+    post_num: 0
+    max_gen_length: -1
+    max_prompt_len: 2000
+    lower_p: 0.1
+    upper_p: 0.9
+    eps: 0.20
+    beta: 0.01
+    use_kl_estimator_k3: True
+    teacher_fill: "clean_fill" # "argmax_fill" or "clean_fill"
+    exclude_im_end: True  # exclude <|im_end|> token from KL loss (useful when teacher disagrees with student stopping)
+    loss_type: "kl"  # forward KL only (OPDLM)
+    student_arm_shift: False  # shift student logits right by 1 to align ARM next-token prediction to current-token convention (use when student starts from untrained ARM weights)
+    zero_stage: 3  # DeepSpeed ZeRO stage for student (2 = params replicated on each GPU, no save-time gather; 3 = params sharded, requires gather on save)
+    offload_optimizer_device: "cpu"  # "cpu" or "none". "none" keeps optimizer on GPU (faster, more VRAM)
+    offload_param_device: "cpu"  # "cpu" or "none". Only used for zero_stage=3. "none" keeps sharded params on GPU (faster, more VRAM, smaller CPU RAM peak at save)
+    # LoRA fine-tuning (default disabled). When enabled, wraps the student model
+    # with PEFT LoRA — only adapter weights are trainable. The teacher and the
+    # full-FT path are unaffected. On save, only the adapter is written
+    # (under <ckpt>/adapter/); eval scripts that load <ckpt>/ as a plain HF model
+    # will not see the adapter — use train/lora_merge.py to produce a merged
+    # checkpoint for eval if needed.
+    lora:
+        enabled: false
+        r: 16                      # LoRA rank
+        alpha: 32                  # scaling (typically 2*r)
+        dropout: 0.05
+        target_modules: ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+        bias: "none"               # "none" | "all" | "lora_only"
+
+
+optimizer:
+    name: adamw
+    params: # default adamw params
+        learning_rate: 1e-5
+        scale_lr: False # scale learning rate by total batch size
+        beta1: 0.9
+        beta2: 0.999
+        weight_decay: 0.0
+        epsilon: 1e-8
+
+
+lr_scheduler:
+    scheduler: "cosine"
+    params:
+        learning_rate: ${optimizer.params.learning_rate}
+        warmup_steps: 5
+        min_lr_scale: 0.1
+
+
+max_token_schedule:
+    enabled: true
+    start: 100       # X: initial max_token
+    end: 2000        # Y: final max_token (defaults to rollout.max_token if not set)
+    ramp_steps: 20   # N: number of current_epochs to ramp over
+    type: "cos"      # "sin" (slow start, sudden increase), "linear"
+
+# Applies to rollout.dynamic_threshold during training rollouts.
+# No effect when rollout.remasking_strategy is low_confidence_static.
+dynamic_threshold_schedule:
+    enabled: false    # off by default; flip to true to activate
+    start: 0.9        # value held during hold phase and at start of ramp
+    end: 0.7          # value reached at end of ramp (clamped thereafter)
+    hold_steps: 150   # keep `start` for steps 1..hold_steps (inclusive)
+    ramp_steps: -1    # -1 = auto: ramp until experiment.total_step (end of training).
+                      # Otherwise, ramp start->end over this many steps AFTER the hold.
+    type: "cos"    # "linear" | "cos" (slow start) | "sin" (slow end)
+
+evaluation:
+    eval_dataset: "MATH500"  # "MATH500" "LiveCodeBench"
+    data_type: "math" # "math" "code"
+    tensor_parallel_size: 1
+    gpu_memory_utilization: 0.8
+    max_active: 128
+    num_response_per_task: 1
+    temperature: 1.0
+    max_token: 2000
+    block_size: 4
+    denoising_steps_per_block: 4
+    top_p: 1.0
+    top_k: [1]
+    remasking_strategy: ["low_confidence_static"] #"low_confidence_static""low_confidence_dynamic"
+    dynamic_threshold: 0.9 # no use for "low_confidence_static"
+    start_with_think: False
+    run_before_training: True  # evaluation before training
+
+# len(top_k) must == len(remasking_strategy)

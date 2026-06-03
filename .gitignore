@@ -1,0 +1,85 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+dist/
+build/
+*.so
+logs
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Models (downloaded / checkpointed)
+pretrained_models/
+!pretrained_models/BD3LM/README.md
+!pretrained_models/Qwen/README.md
+*.safetensors
+*.bin
+*.gguf
+*.pt
+*.pth
+*.ckpt
+
+# Experiment outputs (checkpoints, rollout data, logs)
+experiments/
+rl_sdar/
+rl_trado/
+rl_dream/
+rl_llada/
+rl_mmada/
+sft_*/
+
+# Wandb
+**/wandb/
+
+# Data files (downloaded datasets) — keep prep scripts, ignore JSON blobs
+data/*.json
+data/images/
+data/tmp/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Debug / test scripts
+debug/
+debug_*/
+eval_*/
+progress/
+
+# Plan
+plan*/
+ideas/
+
+# Misc
+*.pkl
+*.log
+*.swp
+*~
+
+triton_cache/
+pure_inference_vision/
+torch_inductor_cache/
+pure_inference/results/
+
+inference_sdar/
+inference_sdar/evaluation
+inference_sdar/cache
+inference_sdar/output
+
+papers/
+tmp/
+
+# User working scripts (kept on disk, not part of release)
+scripts/general_pre_train/vision/

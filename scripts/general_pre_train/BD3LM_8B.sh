@@ -4,27 +4,18 @@
 #SBATCH --gres=gpu:8             # Default. Override at submit time for multi-GPU runs.
 #SBATCH --output=./logs/%x-%j.out  # Standard output (progress bars, prints)
 #SBATCH --err=./logs/%x-%j.err     # Error logs (crashes, tracebacks)
-##SBATCH --partition=short       # Choose your queue (e.g., short, medium, long)
-##SBATCH --time=4:00:00          # Max time for the job
-
-# #SBATCH --partition=2xlong       # Choose your queue (e.g., short, medium, long)
-# #SBATCH --time=2-00:00:00          # Max time for the job
-
-
-##SBATCH --partition=medium       # Choose your queue (e.g., short, medium, long)
-##SBATCH --time=8:00:00          # Max time for the job
-
-
-##SBATCH --time=16:00:00          # Max time for the job
-##SBATCH --partition=long       # Choose your queue (e.g., short, medium, long)
 
 #SBATCH --time=2-00:00:00        # Max time for the job (48h)
 #SBATCH --partition=def
 #SBATCH --qos=standard
 
 #######
+# On-policy ForKL, 8B, with top_k_logits=16 (Nemotron-style sparse KL
+# restricted to teacher's top-16 tokens). 8B sibling of
+# BD3LM_vision_4B_no_threshold_topk16.sh.
+#
 # USAGE:
-# sbatch --gres=gpu:1 --export=NUM_DEVICES=1 run.sh
+# sbatch scripts/general_pre_train/vision/BD3LM_vision_8B_no_threshold_top16.sh
 #######
 
 source ~/.bashrc
@@ -37,7 +28,6 @@ export CUDA_HOME=/sw/eb/sw/CUDA/12.8.0
 export CUDACXX=$CUDA_HOME/bin/nvcc
 export PATH=$CONDA_PREFIX/bin:$CUDA_HOME/bin:$PATH
 export LD_LIBRARY_PATH=$CUDA_HOME/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
-# export CUDA_DEVICE_ORDER=PCI_BUS_ID
 
 set -eox pipefail
 export RUN_TIMESTAMP=$(date +"%m%d_%H%M%S")
@@ -53,7 +43,7 @@ STUDENT=$DATA_PATH/pretrained_models/BD3LM/Qwen3-8B-a2d-init
 TEACHER=$DATA_PATH/pretrained_models/Qwen/Qwen3-8B
 
 
-PORT_OFFSET=96
+PORT_OFFSET=63
 EXPERIMENT_PORT=$((20200 + PORT_OFFSET))
 ROLLOUT_BASE_PORT=$((20300 + PORT_OFFSET))
 
@@ -71,11 +61,9 @@ fi
 
 DEEPSPEED_FILE="1_node_${NUM_GPUS}_gpus_deepspeed_zero3"
 
-RUN_NAME=s128b4bs8_ForKL_Tea8B_Stu8B_len4ks100_lr1e-5cos_thres97s150
+RUN_NAME=s128b4bs8_ForKL_Tea8B_Stu8B_len4ks100_lr1e-5cos_onestate_fix128_top16
 
-# exit 0
-
-# BD3LM 
+# BD3LM
 
 accelerate launch \
     --num_machines 1 \
@@ -99,7 +87,7 @@ accelerate launch \
     model.teacher_model=$TEACHER \
     wandb.group=QwenARM8B_General \
     wandb.run_name=$RUN_NAME \
-    training.one_state_per_block=False \
-    dynamic_threshold_schedule.enabled=True \
-
+    training.one_state_per_block=True \
+    dynamic_threshold_schedule.enabled=False \
+    training.top_k_logits=16 \
 

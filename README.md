@@ -99,15 +99,21 @@ python rl.py config=configs/rl_bd3lm.yaml \
     dataset.train_dataset=opdlm_train
 ```
 
-Reference launchers (mirror the exact hyperparameters from Table 10 of the
-paper — block_size=4, denoising_steps=4, forward KL, threshold=0.9, LR
-1e-5→1e-6 cosine, batch=8, tasks/rollout=1280, max_rollout 100→4000 over 10
-steps):
+Reference launchers mirror the exact hyperparameters from Table 10 of the
+paper: block_size=4, denoising_steps=4, forward KL, one-state-per-block,
+LR 1e-5→1e-6 cosine, batch=8, tasks/rollout=128, max_rollout 100→4000 over
+the first 100 steps. The KL is computed over the **full vocabulary** at
+the 0.6B / 1.7B scales and restricted to the teacher's **top-16 tokens**
+(Nemotron-style sparse KL, `training.top_k_logits=16`) at the 4B / 8B scales.
 
 | Stage | Launcher |
 |-------|----------|
-| OPDLM main training (opdlm_train)               | `scripts/general_pre_train/BD3LM_{06B,17B,4B,8B}.sh` |
-| OPDLM-MATH training (DAPO_Math_17k, math-only)       | `scripts/post_train_dapo/DAPO_OPD_{0.6B,4B}/BD3LM_DAPO_*.sh` |
+| OPDLM 0.6B / 1.7B (full-vocab KL, opdlm_train)        | `scripts/general_pre_train/BD3LM_{06B,17B}.sh` |
+| OPDLM 4B / 8B (top-16 sparse KL, opdlm_train)         | `scripts/general_pre_train/BD3LM_{4B,8B}.sh` |
+| OPDLM-MATH training (DAPO_Math_17k, math-only)        | `scripts/post_train_dapo/DAPO_OPD_{0.6B,4B}/BD3LM_DAPO_*.sh` |
+
+Dynamic-threshold remasking is an **inference-time** choice (see Section 5);
+the launchers above all train with `dynamic_threshold_schedule.enabled=False`.
 
 Each launcher hardcodes its author's `$HF_HOME` path — edit `DATA_PATH`,
 `STUDENT`, `TEACHER`, and the SBATCH header to match your cluster before

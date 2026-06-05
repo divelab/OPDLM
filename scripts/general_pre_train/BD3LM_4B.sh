@@ -53,7 +53,7 @@ STUDENT=$DATA_PATH/pretrained_models/BD3LM/Qwen3-4B-a2d-init
 TEACHER=$DATA_PATH/pretrained_models/Qwen/Qwen3-4B
 
 
-PORT_OFFSET=20
+PORT_OFFSET=48
 EXPERIMENT_PORT=$((20200 + PORT_OFFSET))
 ROLLOUT_BASE_PORT=$((20300 + PORT_OFFSET))
 
@@ -71,7 +71,7 @@ fi
 
 DEEPSPEED_FILE="1_node_${NUM_GPUS}_gpus_deepspeed_zero3"
 
-RUN_NAME=s128b4bs8_ForKL_Tea4B_Stu4B_len4ks100_lr1e-5cos_thres97s150
+RUN_NAME=s128b4bs8_ForKL_Tea4B_Stu4B_len4ks100_lr1e-5cos_onestate_fix128_top16
 
 # exit 0
 
@@ -99,6 +99,7 @@ accelerate launch \
     model.teacher_model=$TEACHER \
     wandb.group=QwenARM4B_General \
     wandb.run_name=$RUN_NAME \
-    training.one_state_per_block=False \
-    dynamic_threshold_schedule.enabled=True \
+    training.one_state_per_block=True \
+    dynamic_threshold_schedule.enabled=False \
+    training.top_k_logits=16 \
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=fixed_train
 #SBATCH --nodes=1
-#SBATCH --gres=gpu:4             # Default. Override at submit time for multi-GPU runs.
+#SBATCH --gres=gpu:8             # Default. Override at submit time for multi-GPU runs.
 #SBATCH --output=./logs/%x-%j.out  # Standard output (progress bars, prints)
 #SBATCH --err=./logs/%x-%j.err     # Error logs (crashes, tracebacks)
 ##SBATCH --partition=short       # Choose your queue (e.g., short, medium, long)
@@ -53,14 +53,14 @@ STUDENT=$DATA_PATH/pretrained_models/BD3LM/Qwen3-1.7B-a2d-init
 TEACHER=$DATA_PATH/pretrained_models/Qwen/Qwen3-1.7B
 
 
-PORT_OFFSET=75
+PORT_OFFSET=38
 EXPERIMENT_PORT=$((20200 + PORT_OFFSET))
 ROLLOUT_BASE_PORT=$((20300 + PORT_OFFSET))
 
 
-NUM_GPUS=4
+NUM_GPUS=8
 PPO_BATCH_SIZE=8
-BATCH_SIZE_LM=2
+BATCH_SIZE_LM=1
 STEPS_PER_BLOCK=4
 GRADIENT_ACCUMULATION_STEPS=$((PPO_BATCH_SIZE / (BATCH_SIZE_LM * NUM_GPUS)))
 if [ $GRADIENT_ACCUMULATION_STEPS -lt 1 ]; then
@@ -71,7 +71,7 @@ fi
 
 DEEPSPEED_FILE="1_node_${NUM_GPUS}_gpus_deepspeed_zero3"
 
-RUN_NAME=s128b4bs8_ForKL_Tea17B_Stu17B_len4ks100_lr1e-5cos_stop150
+RUN_NAME=s128b4bs8_ForKL_Tea17B_Stu17B_len4ks100_lr1e-5cos_onestate_fix128
 
 # exit 0
 
@@ -99,7 +99,6 @@ accelerate launch \
     model.teacher_model=$TEACHER \
     wandb.group=QwenARM1.7B_General \
     wandb.run_name=$RUN_NAME \
-    training.one_state_per_block=False \
+    training.one_state_per_block=True \
     dynamic_threshold_schedule.enabled=False \
-    experiment.stop_RL_step=150
 

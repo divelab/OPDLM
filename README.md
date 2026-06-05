@@ -101,12 +101,7 @@ python rl.py config=configs/rl_bd3lm.yaml \
     dataset.train_dataset=opdlm_train
 ```
 
-All training runs reported in the paper use **1 node × 8 NVIDIA H200 GPUs**
-(8×141 GB HBM3e). DeepSpeed ZeRO-3 with bf16 keeps the optimizer state on CPU
-(`offload_optimizer_device: "cpu"` in `configs/rl_bd3lm.yaml`). 4B and 8B
-runs fit on a single node with these settings; 0.6B and 1.7B leave a lot
-of headroom and can also be run on fewer/smaller GPUs by editing the
-DeepSpeed config under `accelerate_configs/`.
+All training runs reported in the paper use 1 node × 8 NVIDIA H200 GPUs.
 
 Reference launchers mirror the exact hyperparameters from Table 10 of the
 paper: block_size=4, denoising_steps=4, forward KL, one-state-per-block,

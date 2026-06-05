@@ -1,8 +1,17 @@
-# OPDLM: Data-Efficient Autoregressive-to-Diffusion Language Models via On-Policy Distillation
+<div align="center">
+
+# OPDLM
+
+### Data-Efficient Autoregressive-to-Diffusion Language Models via On-Policy Distillation
+
+[![arXiv](https://img.shields.io/badge/arXiv-XXXX.XXXXX-b31b1b.svg)](https://arxiv.org/abs/XXXX.XXXXX)
+[![Hugging Face](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Collection-yellow)](https://huggingface.co/collections/divelab/opdlm)
+
+</div>
 
 Implementation for **"Data-Efficient Autoregressive-to-Diffusion Language Models via On-Policy Distillation"**.
 
-OPDLM is an efficent, on-policy method for converting a pre-trained autoregressive LM into a block-diffusion language model.
+OPDLM is an efficient, on-policy method for converting a pre-trained autoregressive LM into a block-diffusion language model.
 
 All data and models for this release live in the
 [`divelab/opdlm`](https://huggingface.co/collections/divelab/opdlm)
@@ -30,7 +39,7 @@ pip install -r requirements.txt --extra-index-url https://download.pytorch.org/w
 pip install flash-attn==2.7.4.post1 --no-build-isolation
 ```
 
-If `nvcc` and the torch CUDA version disagree (e.g. driver CUDA 12.8 but torch
+If `nvcc` and the torch CUDA version disagree (e.g., driver CUDA 12.8 but torch
 built for 12.4), DeepSpeed will refuse to JIT-compile its CPU Adam op. Set
 `export DS_SKIP_CUDA_CHECK=1` to bypass the check — torch is forward-compat
 across cu12.x minor versions.
@@ -63,7 +72,7 @@ python data/prepare_codeforces.py
 
 The math post-training data (`MATH_train_traceRL.json`, Hendrycks MATH
 level 3-5, ~8K hard tasks, following the traceRL setup) is bundled in
-the `divelab/opdlm_eval_data` repo and is already downloaded by the
+the `divelab/opdlm_eval_data` repo, and is already downloaded by the
 step above.
 
 See [`data/readme.md`](data/readme.md) for per-dataset details.
@@ -118,7 +127,7 @@ the 0.6B / 1.7B scales and restricted to the teacher's **top-16 tokens**
 | OPDLM-MATH 4B / 8B, thinking-on (MATH_train_traceRL)  | `scripts/post_train_math/BD3LM_MATH_{4B,8B}_thinking.sh` |
 
 Dynamic-threshold remasking is an **inference-time** choice (see Section 5);
-the launchers above all train with `dynamic_threshold_schedule.enabled=False`.
+The launchers above all train with `dynamic_threshold_schedule.enabled=False`.
 
 Each launcher hardcodes its author's `$HF_HOME` path — edit `DATA_PATH`,
 `STUDENT`, `TEACHER`, and the SBATCH header to match your cluster before

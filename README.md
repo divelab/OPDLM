@@ -82,6 +82,8 @@ See [`data/readme.md`](data/readme.md) for per-dataset details.
 
 ## 3. Models
 
+Our model checkpoints, trained from 0.6B to 8B can be found on our HugginFace collection - [`divelab/opdlm`](https://huggingface.co/collections/divelab/opdlm)
+
 OPDLM trains a BD3LM-architecture student initialised from a Qwen3 ARM whose
 attention has been switched from causal to bidirectional. Two artefacts are
 needed:

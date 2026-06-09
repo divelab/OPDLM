@@ -1006,6 +1006,17 @@ DATASET_CONFIGS = {
             "chat":    "{question}",    # free-form, no wrapper
         },
     },
+    "opdlm_train": {
+        "path": "opdlm_train.json",
+        "domain": None,                 # per-sample, resolved from data_i["domain"]
+        "prompt_template": None,        # legacy global key — dispatch via per_domain_template
+        "per_domain_template": {
+            "math":    "{question}\nPlease reason step by step, and put your final answer within \\boxed{{}}.",
+            "science": "{question}\nPlease show your choice in the answer field with only the choice letter, e.g., \"answer\": \"C\".",
+            "code":    "{question}",    # instruction baked in (stdio or named-fn at front)
+            "chat":    "{question}",    # free-form, no wrapper
+        },
+    },
     # ── legacy SFT mixture (no verifiable answers) ────────────────────
     # Plain passthrough, correctness check is skipped via
     # dataset.skip_correctness in the rl_bd3lm_sft_mixture.yaml config.

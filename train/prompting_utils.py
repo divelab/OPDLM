@@ -5,13 +5,15 @@ logger = get_logger(__name__, log_level="INFO")
 import torch
 class UniversalPrompting():
     def __init__(self, text_tokenizer,
-                 max_prompt_len=8000, max_gen_length=377, ignore_id=-100):
+                 max_prompt_len=8000, max_gen_length=377, ignore_id=-100,
+                 dllm_style_sft=False):
         """
         :param text_tokenizer: original text tokenizer
         """
         self.text_tokenizer = text_tokenizer
         self.max_gen_length = max_gen_length
         self.max_prompt_len = max_prompt_len
+        self.dllm_style_sft = dllm_style_sft
 
 
     # language modeling

@@ -16,7 +16,7 @@
 # ── Core ML ──
 torch==2.6.0+cu124
 triton==3.2.0
-flash-attn==2.7.4.post1
+# flash-attn==2.7.4.post1
 numpy==1.26.4              # vllm 0.8.x in turn pulls numba which caps numpy<2; pinning to 1.26 keeps everyone happy
 scipy==1.15.3
 einops==0.8.2

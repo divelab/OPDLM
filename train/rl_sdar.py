@@ -261,7 +261,7 @@ def main():
 
         wandb_init_kwargs = dict(
             id=run_id,
-            resume="must",
+            resume="allow",
         )
         wandb_config = {k: v for k, v in flatten_omega_conf(config, resolve=True)}
         wandb_config.pop("experiment.resume_from_checkpoint", None)
@@ -2007,7 +2007,7 @@ def init_training(config):
         if run_id is None:
             raise ValueError("WANDB_RUN_ID environment variable is not set.")
 
-        wandb_init_kwargs = dict(id=run_id, resume="must")
+        wandb_init_kwargs = dict(id=run_id, resume="allow")
         wandb_config = {k: v for k, v in flatten_omega_conf(config, resolve=True)}
         wandb_config.pop("experiment.resume_from_checkpoint", None)
 

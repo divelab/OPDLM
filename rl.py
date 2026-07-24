@@ -73,16 +73,16 @@ if __name__ == "__main__":
     run_id = None
     if wandb_enabled and is_main:
         run_id = wandb.util.generate_id()
-        init_kwargs = dict(
-            project=wandb_project,
-            name=run_name,
-            id=run_id,
-            resume="never",
-        )
-        if wandb_group:
-            init_kwargs["group"] = str(wandb_group)
-        wandb_run = wandb.init(**init_kwargs)
-        wandb.finish()
+        # init_kwargs = dict(
+        #     project=wandb_project,
+        #     name=run_name,
+        #     id=run_id,
+        #     resume="never",
+        # )
+        # if wandb_group:
+        #     init_kwargs["group"] = str(wandb_group)
+        # wandb_run = wandb.init(**init_kwargs)
+        # wandb.finish()
 
     # Propagate wandb env vars for training init
     if is_main:

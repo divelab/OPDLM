@@ -24,7 +24,9 @@ pretrained_models/
 *.pth
 *.ckpt
 
+/data
 # Experiment outputs (checkpoints, rollout data, logs)
+experiment/
 experiments/
 rl_sdar/
 rl_trado/

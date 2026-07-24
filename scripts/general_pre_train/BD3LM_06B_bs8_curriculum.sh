@@ -49,10 +49,10 @@ fi
 DEEPSPEED_FILE="1_node_${NUM_GPUS}_gpus_deepspeed_zero3"
 
 BLOCK_SIZE=8
-DENOISING_STEPS=4
+DENOISING_STEPS=8
 
-RUN_NAME=s128b${BLOCK_SIZE}bs8_curriculum_from_bs4_lr1e-5cos_onestate
-
+RUN_NAME=s128b${BLOCK_SIZE}bs8_curriculum_from_bs4_lr1e-6cos_warm20_revkl_onestate_topk16
+export DS_SKIP_CUDA_CHECK=1
 accelerate launch \
     --num_machines 1 \
     --machine_rank 0 \
@@ -69,16 +69,20 @@ accelerate launch \
     training.batch_size_lm=$BATCH_SIZE_LM \
     training.gradient_accumulation_steps=$GRADIENT_ACCUMULATION_STEPS \
     training.one_state_per_block=True \
+    training.top_k_logits=16 \
     evaluation.block_size=$BLOCK_SIZE \
     evaluation.denoising_steps_per_block=$DENOISING_STEPS \
     evaluation.eval_dataset=GSM8K \
     evaluation.max_token=1000 \
     dataset.train_dataset=opdlm_train \
-    optimizer.params.learning_rate=1e-5 \
+    optimizer.params.learning_rate=1e-6 \
+    lr_scheduler.params.warmup_steps=20 \
+    training.reverse_kl_weight=1.0 \
     max_token_schedule.end=4000 \
     max_token_schedule.ramp_steps=100 \
     model.pretrained_model=$STUDENT \
     model.teacher_model=$TEACHER \
+    wandb.project=opdlmv2 \
     wandb.group=QwenARM0.6B_bs8_curriculum \
     wandb.run_name=$RUN_NAME \
     dynamic_threshold_schedule.enabled=False \

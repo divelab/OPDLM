@@ -48,11 +48,12 @@ fi
 
 DEEPSPEED_FILE="1_node_${NUM_GPUS}_gpus_deepspeed_zero3"
 
-BLOCK_SIZE=8
-DENOISING_STEPS=8
+BLOCK_SIZE=16
+DENOISING_STEPS=16
 
-RUN_NAME=s128b${BLOCK_SIZE}bs8_curriculum_from_bs4_lr1e-6cos_warm20_revkl_onestate_topk16
+RUN_NAME=s128b${BLOCK_SIZE}_curriculum_from_bs4_lr1e-6cos_warm20_revkl_onestate_topk16
 export DS_SKIP_CUDA_CHECK=1
+export CUDA_VISIBLE_DEVICES=0,2,3,4,5,6,7,8
 accelerate launch \
     --num_machines 1 \
     --machine_rank 0 \
@@ -82,7 +83,7 @@ accelerate launch \
     max_token_schedule.ramp_steps=100 \
     model.pretrained_model=$STUDENT \
     model.teacher_model=$TEACHER \
-    wandb.project=opdlmv2 \
-    wandb.group=QwenARM0.6B_bs8_curriculum \
+    wandb.project=opdlm_rebuttal \
+    wandb.group=QwenARM0.6B_bs16_curriculum \
     wandb.run_name=$RUN_NAME \
     dynamic_threshold_schedule.enabled=False \

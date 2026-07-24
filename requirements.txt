@@ -1,58 +1,241 @@
-# OPDLM requirements — verified working on H100 nodes with NVIDIA driver
-# CUDA 12.8 (torch built for cu124, run with DS_SKIP_CUDA_CHECK=1 to bypass
-# DeepSpeed's nvcc major.minor mismatch check).
-#
-# Install order (from a fresh conda env):
-#   conda create -n opdlm python=3.10.19 -y
-#   conda activate opdlm
-#   pip install torch==2.6.0+cu124 --index-url https://download.pytorch.org/whl/cu124
-#   pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cu124
-#   pip install flash-attn==2.7.4.post1 --no-build-isolation
-#
-# (flash-attn must be installed AFTER torch with --no-build-isolation; otherwise
-# it tries to install its own torch and the build pulls a wheel that mismatches
-# the env.)
-
-# ── Core ML ──
-torch==2.6.0+cu124
-triton==3.2.0
-# flash-attn==2.7.4.post1
-numpy==1.26.4              # vllm 0.8.x in turn pulls numba which caps numpy<2; pinning to 1.26 keeps everyone happy
-scipy==1.15.3
-einops==0.8.2
-
-# ── Hugging Face ──
-transformers==4.52.4
-tokenizers==0.21.4
-safetensors==0.7.0
-datasets==4.6.1
-peft==0.17.1
+absl-py==2.4.0
 accelerate==1.11.0
-huggingface-hub==0.36.2
-sentencepiece==0.2.1
-tiktoken==0.12.0
-
-# ── Training ──
-deepspeed==0.18.0
+aiohappyeyeballs==2.6.2
+aiohttp==3.14.1
+aiosignal==1.4.0
+airportsdata==20260315
+annotated-doc==0.0.4
+annotated-types==0.7.0
+anthropic==0.108.0
+antlr4-python3-runtime==4.9.3
+anyio==4.13.0
+appdirs==1.4.4
+astor==0.8.1
+asttokens==3.0.1
+async-timeout==5.0.1
+attrs==26.1.0
 bitsandbytes==0.49.2
-liger_kernel==0.7.0
-
-# ── Inference ──
-vllm==0.8.5.post1          # was 0.7.3 in the original spec; bumped because 0.7.3 force-downgrades torch to 2.5.1, breaking the cu124+flash-attn stack
-
-# ── Logging & config ──
-wandb==0.25.0
-omegaconf==2.3.0
-tensorboard==2.20.0
-termcolor==3.3.0
-tqdm==4.67.3
-
-# ── Evaluation ──
-math_verify==0.9.0
-nest_asyncio==1.6.0
-evalplus==0.3.1            # required for HumanEval/MBPP scoring (rl_execute.evaluate_evalplus_dataset shells out to evalplus.sanitize / evalplus.evaluate). Note: pulls protobuf 5.x as a transitive dep.
-
-# ── Dev tools ──
-matplotlib==3.10.8
-gpustat==1.1.1
+blake3==1.0.8
+blessed @ file:///home/task_176251794346084/conda-bld/blessed_1762518773130/work
+cachetools==7.1.4
+certifi==2026.5.20
+cffi==2.0.0
+charset-normalizer==3.4.7
+click==8.4.1
+cloudpickle==3.1.2
+comm==0.2.3
+compressed-tensors==0.9.3
+contourpy==1.3.2
+cryptography==48.0.0
+cupy-cuda12x==13.6.0
+cycler==0.12.1
+datasets==4.6.1
+debugpy==1.8.21
+decorator==5.3.1
+deepspeed==0.18.0
+Deprecated==1.3.1
+depyf==0.18.0
+detect-installer==0.1.0
+dill==0.4.0
+diskcache==5.6.3
+distro==1.9.0
+dnspython==2.8.0
+docstring_parser==0.18.0
+einops==0.8.2
+email-validator==2.3.0
+evalplus==0.3.1
+exceptiongroup==1.3.1
+executing==2.2.1
+fastapi==0.136.3
+fastapi-cli==0.0.24
+fastapi-cloud-cli==0.19.0
+fastar==0.11.0
+fastrlock==0.8.3
+filelock==3.29.0
+fire==0.7.1
+flash_attn==2.7.4.post1
+fonttools==4.63.0
+frozenlist==1.8.0
+fsspec==2026.2.0
+gguf==0.19.0
+gitdb==4.0.12
+GitPython==3.1.50
+google-ai-generativelanguage==0.6.15
+google-api-core==2.30.3
+google-api-python-client==2.197.0
+google-auth==2.53.0
+google-auth-httplib2==0.4.0
+google-generativeai==0.8.6
+googleapis-common-protos==1.75.0
+gpustat @ file:///croot/gpustat_1701888826609/work
+grpcio==1.81.0
+grpcio-status==1.62.3
+h11==0.16.0
+hf-xet==1.5.1
+hjson==3.1.0
+httpcore==1.0.9
+httplib2==0.31.2
+httptools==0.8.0
+httpx==0.28.1
+huggingface_hub==0.36.2
+idna==3.18
+importlib_metadata==8.0.0
+interegular==0.3.3
 ipykernel==7.2.0
+ipython==8.39.0
+jedi==0.20.0
+Jinja2==3.1.6
+jinxed==2.0.4
+jiter==0.15.0
+jsonschema==4.26.0
+jsonschema-specifications==2025.9.1
+jupyter_client==8.9.1
+jupyter_core==5.9.1
+kiwisolver==1.5.0
+lark==1.2.2
+latex2sympy2_extended==1.11.0
+liger_kernel==0.7.0
+llguidance==0.7.30
+llvmlite==0.44.0
+lm-format-enforcer==0.10.12
+Markdown==3.10.2
+markdown-it-py==4.2.0
+MarkupSafe==3.0.3
+math-verify==0.9.0
+matplotlib==3.10.8
+matplotlib-inline==0.2.2
+mdurl==0.1.2
+mistral_common==1.11.3
+mpmath==1.3.0
+msgpack==1.1.2
+msgspec==0.21.1
+multidict==6.7.1
+multipledispatch==1.0.0
+multiprocess==0.70.18
+nest-asyncio==1.6.0
+networkx==3.4.2
+ninja==1.13.0
+numba==0.61.2
+numpy==1.26.4
+nvidia-cublas-cu12==12.4.5.8
+nvidia-cuda-cupti-cu12==12.4.127
+nvidia-cuda-nvrtc-cu12==12.4.127
+nvidia-cuda-runtime-cu12==12.4.127
+nvidia-cudnn-cu12==9.1.0.70
+nvidia-cufft-cu12==11.2.1.3
+nvidia-curand-cu12==10.3.5.147
+nvidia-cusolver-cu12==11.6.1.9
+nvidia-cusparse-cu12==12.3.1.170
+nvidia-cusparselt-cu12==0.6.2
+nvidia-ml-py @ file:///home/task_176311898187137/conda-bld/nvidia-ml-py_1763119027412/work
+nvidia-nccl-cu12==2.21.5
+nvidia-nvjitlink-cu12==12.4.127
+nvidia-nvtx-cu12==12.4.127
+omegaconf==2.3.0
+openai==2.41.0
+opencv-python-headless==4.11.0.86
+opentelemetry-api==1.26.0
+opentelemetry-exporter-otlp==1.26.0
+opentelemetry-exporter-otlp-proto-common==1.26.0
+opentelemetry-exporter-otlp-proto-grpc==1.26.0
+opentelemetry-exporter-otlp-proto-http==1.26.0
+opentelemetry-proto==1.26.0
+opentelemetry-sdk==1.26.0
+opentelemetry-semantic-conventions==0.47b0
+opentelemetry-semantic-conventions-ai==0.4.13
+outlines==0.1.11
+outlines_core==0.1.26
+packaging==26.0
+pandas==2.3.3
+parso==0.8.7
+partial-json-parser==0.2.1.1.post7
+peft==0.17.1
+pexpect==4.9.0
+pillow==12.2.0
+platformdirs==4.10.0
+prometheus-fastapi-instrumentator==8.0.0
+prometheus_client==0.25.0
+prompt_toolkit==3.0.52
+propcache==0.5.2
+proto-plus==1.28.0
+protobuf==4.25.9
+psutil @ file:///home/task_176189642285093/conda-bld/psutil_1761896463775/work
+ptyprocess==0.7.0
+pure_eval==0.2.3
+py-cpuinfo==9.0.0
+pyarrow==24.0.0
+pyasn1==0.6.3
+pyasn1_modules==0.4.2
+pycountry==26.2.16
+pycparser==3.0
+pydantic==2.13.4
+pydantic-extra-types==2.11.1
+pydantic-settings==2.14.1
+pydantic_core==2.46.4
+Pygments==2.20.0
+pyparsing==3.3.2
+python-dateutil==2.9.0.post0
+python-dotenv==1.2.2
+python-json-logger==4.1.0
+python-multipart==0.0.32
+pytz==2026.2
+PyYAML==6.0.3
+pyzmq==27.1.0
+ray==2.55.1
+referencing==0.37.0
+regex==2026.5.9
+requests==2.34.2
+rich==15.0.0
+rich-toolkit==0.20.1
+rignore==0.7.6
+rpds-py==0.30.0
+safetensors==0.7.0
+scipy==1.15.3
+sentencepiece==0.2.1
+sentry-sdk==2.62.0
+shellingham==1.5.4
+six @ file:///croot/six_1744271502820/work
+smmap==5.0.3
+sniffio==1.3.1
+stack-data==0.6.3
+starlette==1.2.1
+stop-sequencer==1.2.3
+sympy==1.13.1
+tempdir==0.7.1
+tensorboard==2.20.0
+tensorboard-data-server==0.7.2
+termcolor==3.3.0
+tiktoken==0.12.0
+tokenizers==0.21.4
+tomli==2.4.1
+torch==2.6.0+cu124
+torchaudio==2.6.0+cu124
+torchvision==0.21.0+cu124
+tornado==6.5.7
+tqdm==4.67.3
+traitlets==5.15.1
+transformers==4.52.4
+tree-sitter==0.25.2
+tree-sitter-python==0.25.0
+triton==3.2.0
+typer==0.26.7
+typing-inspection==0.4.2
+typing_extensions==4.15.0
+tzdata==2026.2
+uritemplate==4.2.0
+urllib3==2.7.0
+uvicorn==0.49.0
+uvloop==0.22.1
+vllm==0.8.5.post1
+wandb==0.25.0
+watchfiles==1.2.0
+wcwidth @ file:///home/task_176777874962197/croot/wcwidth_1767779156182/work
+websockets==16.0
+Werkzeug==3.1.8
+wget==3.2
+wrapt==2.2.1
+xformers==0.0.29.post2
+xgrammar==0.1.18
+xxhash==3.7.0
+yarl==1.24.2
+zipp==4.1.0

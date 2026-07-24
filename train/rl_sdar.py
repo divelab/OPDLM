@@ -2702,36 +2702,61 @@ def train_one_step(state, config):
         _divergence_type = getattr(config.training, "loss_type", "kl")
         _top_k = int(getattr(config.training, "top_k_logits", 0))
         if _top_k > 0:
-            # Nemotron-style sparse KL: restrict divergence to teacher's top-K tokens.
-            # See NVIDIA-NeMo/RL DistillationLossFn (typical K=64).
-            t_lp_k, idx_k = teacher_logprobs.topk(k=_top_k, dim=-1)   # (B, L, K)
-            s_lp_k = log_probs.gather(-1, idx_k)                       # (B, L, K)
-            # NaN-safe: at teacher_logprob == -inf the KL contribution is 0
-            # in the mathematical limit (p_t=0 means the term vanishes), but
-            # IEEE-754 gives 0 * -inf = NaN. Mask -inf entries to 0 explicitly.
-            # This matters when teacher_sampling_top_p further trims below
-            # top_k_logits=K → some of the K gathered indices have -inf logp.
-            _t_finite = torch.isfinite(t_lp_k)
+            rkl_w = getattr(config.training, "reverse_kl_weight", 0.0)
+
+            # Forward KL is an expectation under the teacher, so select the
+            # teacher top-K support and renormalize both distributions on it.
+            t_fwd_lp, fwd_idx = teacher_logprobs.topk(k=_top_k, dim=-1)
+            s_fwd_lp = log_probs.gather(-1, fwd_idx)
+            _t_fwd_finite = torch.isfinite(t_fwd_lp)
+            t_fwd_lp = F.log_softmax(
+                t_fwd_lp.masked_fill(~_t_fwd_finite, float("-inf")), dim=-1
+            )
+            s_fwd_lp = F.log_softmax(
+                s_fwd_lp.masked_fill(~_t_fwd_finite, float("-inf")), dim=-1
+            )
+
             if _divergence_type == "jsd":
+                # JSD has no single expectation-defining distribution. Keep a
+                # common teacher-selected support, but use normalized top-K
+                # conditionals so this remains a valid divergence.
                 _jsd_alpha = getattr(config.training, "jsd_alpha", 0.5)
-                t_p_k = t_lp_k.exp()
-                s_p_k = s_lp_k.exp()
+                t_p_k = t_fwd_lp.exp()
+                s_p_k = s_fwd_lp.exp()
                 M = _jsd_alpha * t_p_k + (1.0 - _jsd_alpha) * s_p_k
                 log_M = M.log()
-                _fwd_terms = torch.where(_t_finite, t_p_k * (t_lp_k - log_M), torch.zeros_like(t_lp_k))
-                _rev_terms = s_p_k * (s_lp_k - log_M)
+                _fwd_terms = torch.where(
+                    _t_fwd_finite,
+                    t_p_k * (t_fwd_lp - log_M),
+                    torch.zeros_like(t_fwd_lp),
+                )
+                _rev_terms = torch.where(
+                    _t_fwd_finite,
+                    s_p_k * (s_fwd_lp - log_M),
+                    torch.zeros_like(s_fwd_lp),
+                )
                 kl_div = _jsd_alpha * _fwd_terms.sum(dim=-1) \
                        + (1.0 - _jsd_alpha) * _rev_terms.sum(dim=-1)
             else:
-                _fwd_terms = torch.where(_t_finite, t_lp_k.exp() * (t_lp_k - s_lp_k), torch.zeros_like(t_lp_k))
+                _fwd_terms = torch.where(
+                    _t_fwd_finite,
+                    t_fwd_lp.exp() * (t_fwd_lp - s_fwd_lp),
+                    torch.zeros_like(t_fwd_lp),
+                )
                 forward_kl = _fwd_terms.sum(dim=-1)
-                rkl_w = getattr(config.training, "reverse_kl_weight", 0.0)
+
                 if rkl_w > 0:
-                    # Reverse KL term: s_lp_k.exp() * (s_lp_k - t_lp_k). When
-                    # t_lp_k = -inf, this is +inf (assigning student mass to
-                    # forbidden teacher tokens is heavily penalized) — that's
-                    # the mode-seeking property of reverse KL, NOT NaN. Keep.
-                    reverse_kl = (s_lp_k.exp() * (s_lp_k - t_lp_k)).sum(dim=-1)
+                    # Reverse KL is an expectation under the student, so use
+                    # the student top-K support and renormalize both models on
+                    # that same support. This is the conditional reverse KL
+                    # KL(p_student(.|K_s) || p_teacher(.|K_s)), hence >= 0.
+                    s_rev_lp, rev_idx = log_probs.topk(k=_top_k, dim=-1)
+                    t_rev_lp = teacher_logprobs.gather(-1, rev_idx)
+                    s_rev_lp = F.log_softmax(s_rev_lp, dim=-1)
+                    t_rev_lp = F.log_softmax(t_rev_lp, dim=-1)
+                    reverse_kl = (
+                        s_rev_lp.exp() * (s_rev_lp - t_rev_lp)
+                    ).sum(dim=-1)
                     kl_div = (1.0 - rkl_w) * forward_kl + rkl_w * reverse_kl
                 else:
                     kl_div = forward_kl
@@ -2819,28 +2844,56 @@ def train_one_step(state, config):
         _divergence_type = getattr(config.training, "loss_type", "kl")
         _top_k = int(getattr(config.training, "top_k_logits", 0))
         if _top_k > 0:
-            # Nemotron-style sparse KL: restrict divergence to teacher's top-K tokens.
-            t_lp_k, idx_k = teacher_logprobs.topk(k=_top_k, dim=-1)
-            s_lp_k = student_logprobs.gather(-1, idx_k)
-            # NaN-safe: at -inf teacher logp the KL contribution is 0 in the
-            # limit (see comment in forward_process). Mask -inf entries.
-            _t_finite = torch.isfinite(t_lp_k)
+            rkl_w = getattr(config.training, "reverse_kl_weight", 0.0)
+
+            # Forward KL: teacher top-K, with both distributions normalized on
+            # the same selected support.
+            t_fwd_lp, fwd_idx = teacher_logprobs.topk(k=_top_k, dim=-1)
+            s_fwd_lp = student_logprobs.gather(-1, fwd_idx)
+            _t_fwd_finite = torch.isfinite(t_fwd_lp)
+            t_fwd_lp = F.log_softmax(
+                t_fwd_lp.masked_fill(~_t_fwd_finite, float("-inf")), dim=-1
+            )
+            s_fwd_lp = F.log_softmax(
+                s_fwd_lp.masked_fill(~_t_fwd_finite, float("-inf")), dim=-1
+            )
+
             if _divergence_type == "jsd":
                 _jsd_alpha = getattr(config.training, "jsd_alpha", 0.5)
-                t_p_k = t_lp_k.exp()
-                s_p_k = s_lp_k.exp()
+                t_p_k = t_fwd_lp.exp()
+                s_p_k = s_fwd_lp.exp()
                 M = _jsd_alpha * t_p_k + (1.0 - _jsd_alpha) * s_p_k
                 log_M = M.log()
-                _fwd_terms = torch.where(_t_finite, t_p_k * (t_lp_k - log_M), torch.zeros_like(t_lp_k))
-                _rev_terms = s_p_k * (s_lp_k - log_M)
+                _fwd_terms = torch.where(
+                    _t_fwd_finite,
+                    t_p_k * (t_fwd_lp - log_M),
+                    torch.zeros_like(t_fwd_lp),
+                )
+                _rev_terms = torch.where(
+                    _t_fwd_finite,
+                    s_p_k * (s_fwd_lp - log_M),
+                    torch.zeros_like(s_fwd_lp),
+                )
                 kl_div = _jsd_alpha * _fwd_terms.sum(dim=-1) \
                        + (1.0 - _jsd_alpha) * _rev_terms.sum(dim=-1)
             else:
-                _fwd_terms = torch.where(_t_finite, t_lp_k.exp() * (t_lp_k - s_lp_k), torch.zeros_like(t_lp_k))
+                _fwd_terms = torch.where(
+                    _t_fwd_finite,
+                    t_fwd_lp.exp() * (t_fwd_lp - s_fwd_lp),
+                    torch.zeros_like(t_fwd_lp),
+                )
                 forward_kl = _fwd_terms.sum(dim=-1)
-                rkl_w = getattr(config.training, "reverse_kl_weight", 0.0)
+
                 if rkl_w > 0:
-                    reverse_kl = (s_lp_k.exp() * (s_lp_k - t_lp_k)).sum(dim=-1)
+                    # Reverse KL: student top-K, with both distributions
+                    # normalized on that student-selected support.
+                    s_rev_lp, rev_idx = student_logprobs.topk(k=_top_k, dim=-1)
+                    t_rev_lp = teacher_logprobs.gather(-1, rev_idx)
+                    s_rev_lp = F.log_softmax(s_rev_lp, dim=-1)
+                    t_rev_lp = F.log_softmax(t_rev_lp, dim=-1)
+                    reverse_kl = (
+                        s_rev_lp.exp() * (s_rev_lp - t_rev_lp)
+                    ).sum(dim=-1)
                     kl_div = (1.0 - rkl_w) * forward_kl + rkl_w * reverse_kl
                 else:
                     kl_div = forward_kl

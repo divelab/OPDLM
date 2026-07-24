@@ -174,7 +174,7 @@ evaluation:
     denoising_steps_per_block: 4
     top_p: 1.0
     top_k: [1]
-    remasking_strategy: ["low_confidence_static"] #"low_confidence_static""low_confidence_dynamic"
+    remasking_strategy: ["low_confidence_dynamic"] #"low_confidence_static""low_confidence_dynamic"
     dynamic_threshold: 0.9 # no use for "low_confidence_static"
     start_with_think: False
     run_before_training: True  # evaluation before training

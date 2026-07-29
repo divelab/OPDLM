@@ -105,7 +105,7 @@ fi
 # ══════════════════════════════════════════════════════════════════════
 MODELS=(
     # "experiments/s128b4bs8_ForKL_Tea4B_Stu4B_len4ks100_lr1e-5cos_onestate_thres97s150_0424_204209/ckpt/epoch-480"
-    "experiments/s128b4bs8_ForKL_Tea4B_Stu4B_len4ks100_lr1e-5cos_onestate_0429_174143/ckpt/epoch-480"
+    "experiments/s128b16_4B_curriculum_from_bs4_lr1e-6cos_warm20_revkl_onestate_topk16_0724_163722/ckpt/epoch-390"
 )
 MODEL_BASES=(
     "bd3lm"
@@ -128,7 +128,7 @@ DATASETS=(
 
     # "MBPP"
     # "HumanEval"
-    # LCB_v6
+    "LCB_v6"
     # LiveBench
 
 
@@ -140,7 +140,7 @@ DATASETS=(
     # "TriviaQA"
     # "MMLU"
     # "MMLU_Pro"
-    "MMLU_Redux"
+    # "MMLU_Redux"
 
     # "ARC_C_sdar"
     # "MMLU_sdar"
@@ -185,7 +185,7 @@ DATASET_MAX_TOKENS=(
 
 
 # thinking logic
-DATASET_MAX_TOKENS=( $(printf '8000 %.0s' "${DATASETS[@]}") )
+DATASET_MAX_TOKENS=(4096)
 
 
 
@@ -194,8 +194,8 @@ DATASET_MAX_TOKENS=( $(printf '8000 %.0s' "${DATASETS[@]}") )
 # TEMPERATURE=0.0 → argmax (evaluation)
 # NUM_RESPONSE=1  → greedy is deterministic, no need for multiple samples
 # ══════════════════════════════════════════════════════════════════════
-BLOCK_SIZE=4                # BD3LM only
-DENOISING_STEPS=4           # BD3LM only
+BLOCK_SIZE=16               # BD3LM only
+DENOISING_STEPS=16          # BD3LM only
 # Greedy: T=0, top_k=1 (deterministic, single sample)
 TEMPERATURE=1.0
 TOP_P=1.0
@@ -205,10 +205,10 @@ NUM_RESPONSE=1
 SEED=42
 GPU_MEM_UTIL=0.9
 MAX_ACTIVE=32
-TP=1
+TP=8
 BASE_PORT=19029
 OUT_DIR="pure_inference/results"
-TAG="dynamic_OPDLM_4B_base_nothres"                 # subdir suffix: "greedy" or "sample"
+TAG="static_quick_epoch390_lcb_v6_b16s16"                 # subdir suffix: "greedy" or "sample"
 
 # ══════════════════════════════════════════════════════════════════════
 # Multi-GPU data-parallel sharding (optional).
@@ -243,7 +243,7 @@ fi
 # avoid emitting <|im_end|> immediately. SDAR's official eval also uses true.
 ENABLE_THINKING=false
 
-REMASKING_STRATEGY="low_confidence_dynamic"  # low_confidence_static, low_confidence_dynamic
+REMASKING_STRATEGY="low_confidence_static"  # low_confidence_static, low_confidence_dynamic
 DYNAMIC_THRESHOLD=0.4
 
 if [ "${REMASKING_STRATEGY}" = "low_confidence_dynamic" ]; then

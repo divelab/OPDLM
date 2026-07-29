@@ -125,7 +125,7 @@ def evaluate_evalplus_dataset(data: list[dict], evalplus_name: str,
     - Writes a {task_id, solution} jsonl where `solution` = each candidate's
       raw `full_output` (evalplus.sanitize extracts the function itself).
     - Calls `evalplus.evaluate --i_just_wanna_run` on that jsonl.
-    - Parses the resulting `.eval_results.json` per-task `base_status` /
+    - Parses the resulting `_eval_results.json` per-task `base_status` /
       `plus_status` and writes them into each item's `correctness` /
       `execution_result` so downstream rl_code_reward.py works unchanged.
       `correctness[i]` = [base_pass] so existing `all(x)` aggregation
@@ -221,7 +221,7 @@ def evaluate_evalplus_dataset(data: list[dict], evalplus_name: str,
         )
 
     # Step 2: evaluate the sanitized samples. Writes a sibling
-    # `samples-sanitized.eval_results.json`.
+    # `samples-sanitized_eval_results.json`.
     cmd = [
         "evalplus.evaluate",
         "--dataset", evalplus_name,
@@ -233,7 +233,7 @@ def evaluate_evalplus_dataset(data: list[dict], evalplus_name: str,
     # that prompt silently deadlocks the parent (pipe buffer never drains).
     # Delete the stale file and feed /dev/null to stdin so any future prompt
     # errors out immediately instead of hanging.
-    stale_eval_json = sanitized_path.replace(".jsonl", ".eval_results.json")
+    stale_eval_json = sanitized_path.replace(".jsonl", "_eval_results.json")
     if os.path.exists(stale_eval_json):
         os.remove(stale_eval_json)
     cprint(f"[evalplus] running: {' '.join(cmd)}", "cyan")
@@ -245,7 +245,7 @@ def evaluate_evalplus_dataset(data: list[dict], evalplus_name: str,
             f"evalplus.evaluate failed (rc={rc}); log: {log_path}"
         )
 
-    eval_json = sanitized_path.replace(".jsonl", ".eval_results.json")
+    eval_json = sanitized_path.replace(".jsonl", "_eval_results.json")
     if not os.path.isfile(eval_json):
         raise RuntimeError(
             f"evalplus did not produce {eval_json}. Log: {log_path}"

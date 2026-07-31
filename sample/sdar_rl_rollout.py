@@ -540,6 +540,81 @@ if __name__ == "__main__":
         data[i]["extracted_output"] = []
         data[i]["response_length"] = []
         data[i]["prompt"] = prompt_text
+
+    if str(config.rollout.get("generation_mode", "blockwise")) == "self_speculative":
+        from tqdm.auto import tqdm
+        from models.sdar import SDARForCausalLM
+        from self_speculative import SelfSpeculativeStats, cached_self_speculative_generate_sdar
+        if config.experiment.function != "evaluation":
+            raise ValueError("self_speculative is evaluation-only")
+        if float(config.rollout.temperature) != 0.0 or int(config.rollout.top_k) != 1:
+            raise ValueError("self_speculative supports greedy decoding only")
+        import torch
+        torch.cuda.set_device(0)
+        model = SDARForCausalLM.from_pretrained(
+            model_path, torch_dtype=torch.bfloat16,
+        ).to("cuda:0").eval()
+        prompt_ids = [
+            torch.tensor(tokenizer.encode(p, add_special_tokens=False),
+                         dtype=torch.long, device="cuda:0")
+            for p in generation_prompts
+        ]
+        total = len(prompt_ids)
+        all_outputs, all_token_lens = [""] * total, [0] * total
+        total_stats = SelfSpeculativeStats()
+        batch_size = min(int(config.rollout.get("max_active", 8)), 8)
+        progress = tqdm(
+            range(0, total, batch_size),
+            total=(total + batch_size - 1) // batch_size,
+            desc="SDAR self-speculative", unit="batch", dynamic_ncols=True,
+        )
+        stop_id = tokenizer.convert_tokens_to_ids("<|im_end|>")
+        for start in progress:
+            batch = prompt_ids[start:start + batch_size]
+            generated_ids, batch_stats = cached_self_speculative_generate_sdar(
+                model, batch, max_new_tokens=int(config.rollout.max_token),
+                draft_block_size=int(config.rollout.get("draft_block_size", 4)),
+                mask_id=tokenizer.mask_token_id, eos_id=stop_id,
+                pad_id=tokenizer.pad_token_id,
+            )
+            for field in total_stats.__dataclass_fields__:
+                setattr(total_stats, field,
+                        getattr(total_stats, field) + getattr(batch_stats, field))
+            for offset, (tokens, prompt) in enumerate(zip(generated_ids, batch)):
+                completion = tokens[prompt.numel():]
+                eos = (completion == stop_id).nonzero(as_tuple=False)
+                if eos.numel():
+                    completion = completion[:int(eos[0, 0])]
+                all_outputs[start + offset] = tokenizer.decode(
+                    completion.tolist(), skip_special_tokens=False,
+                )
+                all_token_lens[start + offset] = completion.numel()
+            live = total_stats.report()
+            progress.set_postfix(
+                prompts=f"{min(start + batch_size, total)}/{total}",
+                accept=f"{live['draft_token_acceptance_rate']:.3f}",
+                tok_fwd=f"{live['generated_tokens_per_total_forward_pass']:.3f}",
+            )
+        metrics = total_stats.report()
+        cprint("Self-speculative metrics: " + json.dumps(metrics, sort_keys=True), "green")
+        for i, full_output in enumerate(all_outputs):
+            idx = index_list[i]
+            data[idx]["full_output"].append(full_output)
+            data[idx]["step_map"].append([])
+            data[idx]["extracted_output"].append(
+                extract_answer(full_output, data_i=data[idx], ds_cfg=ds_cfg)
+            )
+            data[idx]["response_length"].append(all_token_lens[i])
+        output_file_name = "../" + project_name + "/temp_data/outputs-" + outputs_name + ".json"
+        metrics_file_name = "../" + project_name + "/results/self_speculative_metrics-" + outputs_name + ".json"
+        os.makedirs(os.path.dirname(output_file_name), exist_ok=True)
+        os.makedirs(os.path.dirname(metrics_file_name), exist_ok=True)
+        with open(output_file_name, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        with open(metrics_file_name, "w", encoding="utf-8") as f:
+            json.dump(metrics, f, indent=2)
+        cprint(f"Saved rollout outputs to {output_file_name}", "green")
+        raise SystemExit(0)
     
 
 

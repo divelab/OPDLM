@@ -23,7 +23,8 @@ pretrained_models/
 *.pt
 *.pth
 *.ckpt
-
+/results
+/models
 /data
 # Experiment outputs (checkpoints, rollout data, logs)
 experiment/

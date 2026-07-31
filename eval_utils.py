@@ -424,6 +424,21 @@ DATASET_CONFIGS = {
         "dllm_max_new_tokens": 3,
         "dllm_steps_per_block": 3,
     },
+    # Shared OPDLM/SDAR self-speculative comparison. Uses the same shuffled
+    # questions and choices as GPQA_Diamond_shuffled, but the response format
+    # used by SDAR's reference GPQA evaluation avoids immediate-EOS behavior.
+    "GPQA_Diamond_selfspec": {
+        "path": "GPQA_Diamond_shuffled.json",
+        "domain": "mc",
+        "prompt_template": (
+            "What is the correct answer to this question: {question}\n"
+            "Format your response as follows: "
+            "\"The correct answer is (insert answer here)\""
+        ),
+        "reformat_choices": True,
+        "dllm_max_new_tokens": 2048,
+        "dllm_steps_per_block": 32,
+    },
     "GPQA_Main_shuffled": {
         "path": "GPQA_Main_shuffled.json",
         "domain": "mc",
@@ -1058,7 +1073,7 @@ _EVALPLUS_RESPONSE_PREFIX = (
 )
 
 
-def build_evalplus_prompt(question_text, tokenizer):
+def build_evalplus_prompt(question_text, tokenizer, enable_thinking=False):
     """Return an evalplus-style chat prompt that ends inside a ```python
     fence, ready for the model to continue. Mirrors evalplus's codegen
     path so training-time eval produces the same prompt EvalPlus uses for
@@ -1068,6 +1083,13 @@ def build_evalplus_prompt(question_text, tokenizer):
     user_content = (
         f"{_EVALPLUS_INSTRUCTION_PREFIX}\n```\n{question_text.strip()}\n```\n"
     )
+    if enable_thinking:
+        return tokenizer.apply_chat_template(
+            [{"role": "user", "content": user_content}],
+            tokenize=False,
+            add_generation_prompt=True,
+            enable_thinking=True,
+        )
     response = f"{_EVALPLUS_RESPONSE_PREFIX}\n```python\n{_EVALPLUS_MAGIC}\n```\n"
     try:
         rendered = tokenizer.apply_chat_template(

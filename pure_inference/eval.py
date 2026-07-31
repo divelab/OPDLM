@@ -46,6 +46,13 @@ def main():
                              "If omitted, falls back to defaults (GSM8K=1000, MATH500/AIME24=2000, else=2048).")
     parser.add_argument("--block_size", type=int, default=4)
     parser.add_argument("--denoising_steps_per_block", type=int, default=4)
+    parser.add_argument("--generation-mode", choices=["blockwise", "self_speculative"], default="blockwise")
+    parser.add_argument("--draft-block-size", type=int, default=4)
+    parser.add_argument("--self-speculative-margin-threshold", type=float, default=0.05,
+                        help=("Sequentially reverify draft blocks whose causal top-1/top-2 "
+                              "logit margin is at or below this value (default: 0.05; "
+                              "0 disables)."))
+    parser.add_argument("--debug-compare-causal", action="store_true")
     parser.add_argument("--temperature", type=float, default=0.0,
                         help="0.0 = argmax (default). Set >0 for stochastic sampling.")
     parser.add_argument("--top_p", type=float, default=1.0)
@@ -83,6 +90,15 @@ def main():
                               "Use 2-8 for long thinking-mode runs to avoid losing all work "
                               "if a JetEngine worker dies on a tail prompt. Default: 1 (no chunking)."))
     args = parser.parse_args()
+    if args.generation_mode == "self_speculative":
+        if args.draft_block_size <= 0:
+            parser.error("--draft-block-size must be positive")
+        if args.temperature != 0.0 or args.top_k != 1:
+            parser.error("self_speculative initially supports greedy decoding only")
+        if any(mb not in ("bd3lm", "sdar") for mb in args.model_bases):
+            parser.error("self_speculative is only available for OPDLM/BD3LM and SDAR models")
+        if args.self_speculative_margin_threshold < 0:
+            parser.error("--self-speculative-margin-threshold must be nonnegative")
 
     assert len(args.models) == len(args.model_bases), "--models and --model_bases must have same length"
     for mb in args.model_bases:
@@ -151,8 +167,13 @@ def main():
             os.makedirs(os.path.join(project_abs, "results"), exist_ok=True)
             os.makedirs(os.path.join(project_abs, "temp_data"), exist_ok=True)
 
-            # Per-(model, dataset) config file to avoid overwrites when running in parallel
-            config_path = os.path.join(project_abs, "_tmp_eval_config.yaml")
+            # Environment shards share the output directory but must not race
+            # on the temporary rollout config.
+            _config_shard = os.environ.get("CHUNK_INDEX", "").strip()
+            _config_suffix = f"_chunk{_config_shard}" if _config_shard else ""
+            config_path = os.path.join(
+                project_abs, f"_tmp_eval_config{_config_suffix}.yaml",
+            )
 
             cfg = {
                 "wandb": {"enabled": False, "project": "pure_inference", "group": None, "run_name": "eval"},
@@ -195,6 +216,10 @@ def main():
                     "min_p": args.min_p,
                     "remasking_strategy": args.remasking_strategy,
                     "dynamic_threshold": args.dynamic_threshold,
+                    "generation_mode": args.generation_mode,
+                    "draft_block_size": args.draft_block_size,
+                    "self_speculative_margin_threshold": args.self_speculative_margin_threshold,
+                    "debug_compare_causal": args.debug_compare_causal,
                     # Single thinking knob: --enable_thinking sets start_with_think.
                     "start_with_think": args.enable_thinking,
                     "base_port": args.base_port,
@@ -252,6 +277,10 @@ def main():
                     "min_p": args.min_p,
                     "remasking_strategy": args.remasking_strategy,
                     "dynamic_threshold": args.dynamic_threshold,
+                    "generation_mode": args.generation_mode,
+                    "draft_block_size": args.draft_block_size,
+                    "self_speculative_margin_threshold": args.self_speculative_margin_threshold,
+                    "debug_compare_causal": args.debug_compare_causal,
                     # Single thinking knob: --enable_thinking sets start_with_think.
                     "start_with_think": args.enable_thinking,
                     "run_before_training": True,

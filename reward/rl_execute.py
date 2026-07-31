@@ -74,13 +74,25 @@ def evaluate_lcb_dataset(data: list[dict], timeout: int = 6,
     cprint(f"[lcb] scoring {len(samples_list)} submissions "
            f"({len(data)} problems) with {num_process_evaluate} procs...",
            "cyan")
-    metrics, results, _meta = codegen_metrics(
-        samples_list, generations_list,
-        k_list=[1],
-        num_process_evaluate=num_process_evaluate,
-        timeout=timeout,
-    )
-    pass1 = metrics.get("pass@1") if isinstance(metrics, dict) else None
+    # Bound the nested multiprocessing fan-out; submitting all of LCB-v6 at
+    # once can exhaust process resources and silently mark every job failed.
+    results = {}
+    score_batch_size = 64
+    for start in range(0, len(samples_list), score_batch_size):
+        end = min(start + score_batch_size, len(samples_list))
+        _metrics, batch_results, _meta = codegen_metrics(
+            samples_list[start:end], generations_list[start:end],
+            k_list=[1], num_process_evaluate=num_process_evaluate,
+            timeout=timeout,
+        )
+        for local_i, value in batch_results.items():
+            results[start + local_i] = value
+    passed_count = 0
+    for flat_i in range(len(samples_list)):
+        candidate = results.get(flat_i, [[]])
+        tests = candidate[0] if candidate else []
+        passed_count += int(bool(tests) and all(x is True for x in tests))
+    pass1 = 100.0 * passed_count / len(samples_list)
     cprint(f"[lcb] pass@1 (micro across submissions) = {pass1}", "green")
 
     # Initialize per-item correctness buckets with the right width.
@@ -125,7 +137,7 @@ def evaluate_evalplus_dataset(data: list[dict], evalplus_name: str,
     - Writes a {task_id, solution} jsonl where `solution` = each candidate's
       raw `full_output` (evalplus.sanitize extracts the function itself).
     - Calls `evalplus.evaluate --i_just_wanna_run` on that jsonl.
-    - Parses the resulting `_eval_results.json` per-task `base_status` /
+    - Parses the resulting `.eval_results.json` per-task `base_status` /
       `plus_status` and writes them into each item's `correctness` /
       `execution_result` so downstream rl_code_reward.py works unchanged.
       `correctness[i]` = [base_pass] so existing `all(x)` aggregation
@@ -220,8 +232,8 @@ def evaluate_evalplus_dataset(data: list[dict], evalplus_name: str,
             "yellow",
         )
 
-    # Step 2: evaluate the sanitized samples. Writes a sibling
-    # `samples-sanitized_eval_results.json`.
+    # Step 2: evaluate the sanitized samples. EvalPlus releases use either
+    # `.eval_results.json` or `_eval_results.json` for the sibling output.
     cmd = [
         "evalplus.evaluate",
         "--dataset", evalplus_name,
@@ -233,9 +245,13 @@ def evaluate_evalplus_dataset(data: list[dict], evalplus_name: str,
     # that prompt silently deadlocks the parent (pipe buffer never drains).
     # Delete the stale file and feed /dev/null to stdin so any future prompt
     # errors out immediately instead of hanging.
-    stale_eval_json = sanitized_path.replace(".jsonl", "_eval_results.json")
-    if os.path.exists(stale_eval_json):
-        os.remove(stale_eval_json)
+    eval_json_candidates = [
+        sanitized_path.replace(".jsonl", ".eval_results.json"),
+        sanitized_path.replace(".jsonl", "_eval_results.json"),
+    ]
+    for stale_eval_json in eval_json_candidates:
+        if os.path.exists(stale_eval_json):
+            os.remove(stale_eval_json)
     cprint(f"[evalplus] running: {' '.join(cmd)}", "cyan")
     with open(log_path, "a") as logf, open(os.devnull, "rb") as devnull:
         rc = subprocess.call(cmd, stdout=logf, stderr=subprocess.STDOUT,
@@ -245,10 +261,13 @@ def evaluate_evalplus_dataset(data: list[dict], evalplus_name: str,
             f"evalplus.evaluate failed (rc={rc}); log: {log_path}"
         )
 
-    eval_json = sanitized_path.replace(".jsonl", "_eval_results.json")
-    if not os.path.isfile(eval_json):
+    eval_json = next(
+        (path for path in eval_json_candidates if os.path.isfile(path)), None,
+    )
+    if eval_json is None:
         raise RuntimeError(
-            f"evalplus did not produce {eval_json}. Log: {log_path}"
+            f"evalplus did not produce any of {eval_json_candidates}. "
+            f"Log: {log_path}"
         )
     with open(eval_json) as f:
         eval_data = json.load(f)

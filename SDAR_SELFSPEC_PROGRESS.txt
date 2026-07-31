@@ -1,0 +1,182 @@
+SELF-SPECULATIVE EVALUATION RESUME NOTE (updated 2026-07-30)
+
+Status: OPDLM and SDAR K=4 self-speculative implementations and full HumanEval/LCB-v6 comparisons are complete.
+
+LCB-v6 matched setting
+- Models: OPDLM-4B and JetLM/SDAR-4B-Chat
+- Dataset: existing LCB_v6 pipeline, 454 problems
+- Decoding: greedy self-speculative, K=4, max_new_tokens=8000
+- Execution: 8 GPU shards, one response/problem, existing LCB private-test evaluator
+
+Verified LCB-v6 results
+- OPDLM-4B: 93/454 = 20.4846% pass@1
+  - acceptance: 81.5848%
+  - accepted draft tokens/iteration: 3.2631
+  - generated tokens/iteration: 3.5994
+  - conceptual tokens per draft+verify forward: 1.7997
+  - total generated tokens: 569,299
+- SDAR-4B-Chat: 61/454 = 13.4361% pass@1
+  - verified independently by shard: 8 + 12 + 8 + 4 + 7 + 13 + 4 + 5 = 61
+  - acceptance: 90.9388%
+  - accepted draft tokens/iteration: 3.6371
+  - generated tokens/iteration: 3.8002
+  - conceptual tokens per draft+verify forward: 1.9001
+  - total generated tokens: 158,810
+- OPDLM advantage under matched self-speculation: +32 solved problems, +7.0485 absolute accuracy points, about +52.4% relative accuracy.
+- Important interpretation: SDAR has higher acceptance/tokens-per-forward but much lower accuracy. Self-agreement is not evidence of retained code capability.
+
+LCB-v6 result locations
+- OPDLM: pure_inference/results/OPDLM-4B_LCB_v6_selfspec_k4_guard005_8gpu_8k_lcbv6/
+- SDAR: pure_inference/results/SDAR-4B-Chat_LCB_v6_selfspec_k4_8gpu_8k_lcbv6/
+
+HumanEval matched results
+- OPDLM-4B self-spec K=4: HumanEval 73.78% (121/164), HumanEval+ 70.12% (115/164), acceptance 83.32%, generated/iteration 3.64, conceptual tokens/forward 1.82.
+- SDAR-4B native K=4: HumanEval 75.61%, HumanEval+ 66.46%.
+- SDAR-4B self-spec K=4: HumanEval 79.27% (130/164), HumanEval+ 71.34% (117/164), acceptance 87.47%, generated/iteration 3.73, conceptual tokens/forward 1.86.
+- Therefore the earlier hypothesis that SDAR would regress under self-speculation is false on HumanEval.
+
+Implementation completed
+- sample/self_speculative.py contains OPDLM KV-cached self-speculation and SDAR position-aligned self-speculation.
+- sample/sdar_rl_rollout.py has an evaluation-only self-speculative path.
+- pure_inference/eval.py permits self_speculative for bd3lm and sdar.
+- reward/pyext.py is a permanent local RuntimeModule implementation required by LCB.
+- reward/rl_execute.py evaluates LCB submissions in bounded batches to reduce nested-multiprocessing exhaustion.
+
+Evaluator caveat
+- Monolithic LCB scoring produced invalid 0% results because the evaluator nests ProcessPoolExecutor, multiprocessing.Manager, and one process per submission.
+- Both final LCB scores above were verified using independent per-shard scoring. The SDAR shard counts are explicitly recorded above.
+- Pathological submissions can still hold a worker for nearly (timeout + 1) * number_of_tests + 5 seconds. A future cleanup should enforce a bounded outer per-submission wall timeout and terminate/join the full process tree without changing the six-second per-test limit.
+
+Scientific caution / next required control
+- Do not claim SDAR fails to benefit from self-speculation based only on the comparison above.
+- Run matched native SDAR LCB-v6 before claiming an SDAR self-speculative delta.
+- Defensible current claim: under the same K=4 self-speculative evaluation, OPDLM-4B substantially outperforms SDAR-4B on LCB-v6 despite SDAR having higher token acceptance and nominal tokens/forward.
+
+Consolidated results tables
+
+LCB-v6 headline comparison (454 problems, K=4 self-speculative)
+
+| Model | Pass@1 | Solved | Acceptance | Accepted/iteration | Generated/iteration | Tokens/forward |
+|---|---:|---:|---:|---:|---:|---:|
+| OPDLM-4B | 20.48% | 93/454 | 81.58% | 3.26 | 3.60 | 1.80 |
+| SDAR-4B-Chat | 13.44% | 61/454 | 90.94% | 3.64 | 3.80 | 1.90 |
+| OPDLM advantage | +7.05 points | +32 | -9.35 points | -0.37 | -0.20 | -0.10 |
+
+HumanEval matched comparison
+
+| Model | Mode | K | HumanEval | HumanEval+ | Acceptance | Generated/iteration | Tokens/forward |
+|---|---|---:|---:|---:|---:|---:|---:|
+| OPDLM-4B | self-speculative | 4 | 73.78% | 70.12% | 83.32% | 3.64 | 1.82 |
+| SDAR-4B-Chat | native blockwise | 4 | 75.61% | 66.46% | n/a | n/a | 1.86  |
+
+Completed OPDLM-0.6B self-speculative evaluations
+
+| Benchmark | K | Accuracy | Acceptance | Generated/iteration | Tokens/forward |
+|---|---:|---:|---:|---:|---:|
+| GSM8K | 4 | 52.46% | 75.50% | 3.46 | 1.73 |
+| GSM8K | 16 | 53.37% | 18.14% | 3.90 | 1.95 |
+| HumanEval | 4 | 28.66% | 87.83% | 3.73 | 1.87 |
+| HumanEval | 16 | 28.05% | 23.37% | 4.73 | 2.37 |
+| MBPP | 4 | 35.45% | 77.03% | 3.48 | 1.74 |
+| MBPP | 16 | 35.45% | 20.54% | 4.26 | 2.13 |
+
+Metric convention
+- Tokens/forward is generated tokens divided by two conceptual model calls per self-speculative sequence iteration (one draft and one verification call), matching the convention used throughout this experiment discussion.
+- The physical batched-call metric in individual JSON files is a separate implementation-level measurement and should not be mixed into the table above.
+
+
+Matched AIME 8K final results
+
+Setting: OPDLM-4B versus SDAR-4B-Chat, greedy self-speculative K=4, max_new_tokens=8000, one response/problem, existing math verifier, 30 problems/year.
+
+| Model | Dataset | Accuracy | Acceptance | Generated/iteration | Tokens/forward |
+|---|---|---:|---:|---:|---:|
+| OPDLM-4B | AIME 2024 | 23.33% (7/30) | 91.30% | 3.81 | 1.91 |
+| SDAR-4B-Chat | AIME 2024 | 6.67% (2/30) | 93.53% | 3.86 | 1.93 |
+| OPDLM-4B | AIME 2025 | 16.67% (5/30) | 89.22% | 3.77 | 1.88 |
+| SDAR-4B-Chat | AIME 2025 | 10.00% (3/30) | 86.76% | 3.71 | 1.86 |
+| OPDLM-4B aggregate | Both years | 20.00% (12/60) | — | — | — |
+| SDAR-4B-Chat aggregate | Both years | 8.33% (5/60) | — | — | — |
+
+AIME interpretation: OPDLM wins by +16.67 points on AIME 2024, +6.67 points on AIME 2025, and +11.67 points aggregated (12 versus 5 solved). These are matched greedy pass@1 results, not Avg@32 sampling numbers.
+
+AIME result locations
+- pure_inference/results/OPDLM-4B_AIME2024_selfspec_k4_guard005_4gpu_8k_aime/
+- pure_inference/results/OPDLM-4B_AIME2025_selfspec_k4_guard005_4gpu_8k_aime/
+- pure_inference/results/SDAR-4B-Chat_AIME2024_selfspec_k4_4gpu_8k_aime/
+- pure_inference/results/SDAR-4B-Chat_AIME2025_selfspec_k4_4gpu_8k_aime/
+
+Matched GSM8K 2K final results
+
+Setting: OPDLM-4B versus SDAR-4B-Chat, greedy self-speculative K=4, max_new_tokens=2000, one response/problem, existing GSM8K evaluator, 1319 problems. OPDLM uses the 0.05 lazy high-precision guard.
+
+| Model | Accuracy | Solved | Acceptance | Accepted/iteration | Generated/iteration | Tokens/forward | Parallel generation wall time |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| OPDLM-4B | 88.86% | 1172/1319 | 80.28% | 3.21 | 3.58 | 1.79 | 13m 02s |
+| SDAR-4B-Chat | 89.69% | 1183/1319 | 86.48% | 3.46 | 3.70 | 1.85 | 14m 03s |
+| OPDLM difference | -0.83 points | -11 | -6.19 points | -0.25 | -0.12 | -0.06 | -1m 01s |
+
+GSM8K aggregate raw metrics
+- OPDLM: 398133 accepted / 495923 proposed; 123984 sequence iterations; 443763 generated tokens; 26258 batched drafting calls and 26258 batched verification calls.
+- SDAR: 267679 accepted / 309543 proposed; 77389 sequence iterations; 286404 generated tokens; 17380 batched drafting calls and 17380 batched verification calls.
+- Parallel wall time is the slowest of the four concurrently running GPU shards, rather than the sum of per-GPU generation seconds.
+
+GSM8K result locations
+- pure_inference/results/OPDLM-4B_GSM8K_selfspec_k4_guard005_4gpu_2k_gsm8k/
+- pure_inference/results/SDAR-4B-Chat_GSM8K_selfspec_k4_4gpu_2k_gsm8k/
+
+Matched MATH-500 4K final results
+
+Setting: OPDLM-4B versus SDAR-4B-Chat, greedy self-speculative K=4, max_new_tokens=4000, one response/problem, existing math verifier, 500 problems. OPDLM uses the 0.05 lazy high-precision guard.
+
+| Model | Accuracy | Solved | Acceptance | Accepted/iteration | Generated/iteration | Tokens/forward | Parallel generation wall time |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| OPDLM-4B | 82.20% | 411/500 | 84.72% | 3.39 | 3.67 | 1.84 | 19m 46s |
+| SDAR-4B-Chat | 67.80% | 339/500 | 90.31% | 3.61 | 3.79 | 1.90 | 15m 16s |
+| OPDLM advantage | +14.40 points | +72 | -5.59 points | -0.22 | -0.12 | -0.06 | +4m 30s |
+
+MATH-500 aggregate raw metrics
+- OPDLM: 420690 accepted / 496586 proposed; 124153 sequence iterations; 455982 generated tokens; 41426 batched drafting calls and 41426 batched verification calls.
+- SDAR: 271263 accepted / 300365 proposed; 75094 sequence iterations; 284829 generated tokens; 22315 batched drafting calls and 22315 batched verification calls.
+- Tokens/forward follows the established conceptual convention: generated tokens / (2 * sequence iterations).
+- Parallel generation wall time is the slowest of the four concurrently running GPU shards.
+
+MATH-500 result locations
+- pure_inference/results/OPDLM-4B_MATH500_selfspec_k4_guard005_4gpu_4k_math500/
+- pure_inference/results/SDAR-4B-Chat_MATH500_selfspec_k4_4gpu_4k_math500/
+
+Matched GPQA-Diamond shared-prompt 4K results
+
+Setting: 198 shuffled GPQA-Diamond questions, identical SDAR-compatible prompt and answer ordering, greedy self-speculative K=4, max_new_tokens=4000, one response/problem. OPDLM uses the 0.05 lazy high-precision guard.
+
+| Model | Accuracy | Solved | Acceptance | Accepted/iteration | Generated/iteration | Tokens/forward | At 4K cap | Invalid |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| OPDLM-4B | 32.32% | 64/198 | 78.77% | 3.15 | 3.53 | 1.76 | 25 | 9 |
+| SDAR-4B-Chat | 32.83% | 65/198 | 67.84% | 2.71 | 3.16 | 1.58 | 0 | 5 |
+| OPDLM difference | -0.51 points | -1 | +10.92 points | +0.44 | +0.36 | +0.18 | +25 | +4 |
+
+Interpretation: accuracy is a one-question tie under the corrected matched prompt, while OPDLM is faster under the conceptual tokens/forward metric. This is not yet a clean final accuracy comparison because 25/198 OPDLM responses reached the 4000-token cap; SDAR had no truncations. The earlier 1K run is invalid for comparison because the old letter-only prompt triggered immediate EOS for SDAR and truncated 79 OPDLM responses.
+
+GPQA result locations
+- pure_inference/results/OPDLM-4B_GPQA_Diamond_selfspec_selfspec_k4_guard005_4gpu_4k_gpqa_sharedprompt/
+- pure_inference/results/SDAR-4B-Chat_GPQA_Diamond_selfspec_selfspec_k4_4gpu_4k_gpqa_sharedprompt/
+
+Matched MBPP 1K final results
+
+Setting: full EvalPlus MBPP set (378 problems), greedy self-speculative K=4, max_new_tokens=1000, one response/problem, identical EvalPlus prompt/evaluator. OPDLM uses the 0.05 lazy high-precision guard.
+
+| Model | MBPP base | MBPP+ | Acceptance | Accepted/iteration | Generated/iteration | Tokens/forward | At 1K cap |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| OPDLM-4B | 70.37% (266/378) | 61.38% (232/378) | 76.31% | 3.05 | 3.49 | 1.74 | 3 |
+| SDAR-4B-Chat | 77.78% (294/378) | 65.34% (247/378) | 78.15% | 3.13 | 3.53 | 1.76 | 1 |
+| OPDLM difference | -7.41 points | -3.97 points | -1.84 points | -0.07 | -0.04 | -0.02 | +2 |
+
+MBPP aggregate raw metrics
+- OPDLM: 80927 accepted / 106048 proposed; 26514 sequence iterations; 92423 generated tokens; 5862 batched drafting and 5862 batched verification calls.
+- SDAR: 58816 accepted / 75262 proposed; 18816 sequence iterations; 66339 generated tokens; 3620 batched drafting and 3620 batched verification calls.
+- EvalPlus MBPP+ requires passing both the base and extra test suites; the exact both-pass counts are 232 and 247.
+- The 1000-token cap is adequate: only 3 OPDLM and 1 SDAR responses reached it.
+
+MBPP result locations
+- pure_inference/results/OPDLM-4B_MBPP_selfspec_k4_guard005_4gpu_1k_mbpp/
+- pure_inference/results/SDAR-4B-Chat_MBPP_selfspec_k4_4gpu_1k_mbpp/

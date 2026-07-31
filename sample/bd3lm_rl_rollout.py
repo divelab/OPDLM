@@ -722,11 +722,11 @@ def _build_get_prompt(tokenizer, ds_cfg, enable_thinking):
     def get_prompt_fn(data_i):
         q = data_i["question"]
         if ds_cfg.get("chat_style") == "evalplus_prefill":
-            return build_evalplus_prompt(q, tokenizer)
+            return build_evalplus_prompt(q, tokenizer, enable_thinking=enable_thinking)
         if ds_cfg.get("chat_style") == "lcb":
-            # LCB: system message + pre-baked canonical user prompt, always
-            # non-thinking (matches Qwen3 tech-report LCB numbers).
-            return build_lcb_prompt(q, tokenizer, enable_thinking=False)
+            # LCB remains non-thinking by default; explicit --enable_thinking
+            # opts into the tokenizer's thinking template.
+            return build_lcb_prompt(q, tokenizer, enable_thinking=enable_thinking)
         if ds_cfg.get("reformat_choices"):
             q = reformat_choices(q)
         per_dom_tpl = ds_cfg.get("per_domain_template")
@@ -1090,9 +1090,9 @@ if __name__ == "__main__":
     def get_prompt(data_i):
         q = data_i["question"]
         if ds_cfg.get("chat_style") == "evalplus_prefill":
-            return build_evalplus_prompt(q, tokenizer)
+            return build_evalplus_prompt(q, tokenizer, enable_thinking=enable_thinking)
         if ds_cfg.get("chat_style") == "lcb":
-            return build_lcb_prompt(q, tokenizer, enable_thinking=False)
+            return build_lcb_prompt(q, tokenizer, enable_thinking=enable_thinking)
         if ds_cfg.get("reformat_choices"):
             q = reformat_choices(q)
         per_dom_tpl = ds_cfg.get("per_domain_template")
@@ -1136,6 +1136,103 @@ if __name__ == "__main__":
 
     N = len(generation_prompts)
     cprint(f"Starting BD3LM generation: {N} total samples ({num} prompts x {k_sample} responses)...", "green")
+
+    # Isolated HF path for same-model blockwise drafting + causal verification.
+    if str(config.rollout.get("generation_mode", "blockwise")) == "self_speculative":
+        from tqdm.auto import tqdm
+        from self_speculative import (
+            SelfSpeculativeStats, cached_self_speculative_generate, causal_greedy,
+        )
+        if config.experiment.function != "evaluation":
+            raise ValueError("self_speculative is an evaluation-only generation mode")
+        if float(config.rollout.temperature) != 0.0 or int(config.rollout.top_k) != 1:
+            raise ValueError("self_speculative initially supports greedy decoding only")
+        draft_size = int(config.rollout.get("draft_block_size", 4))
+        debug_compare = bool(config.rollout.get("debug_compare_causal", False))
+        margin_threshold = float(
+            config.rollout.get("self_speculative_margin_threshold", 0.0)
+        )
+        _register_a2d_model_classes()
+        torch.cuda.set_device(0)
+        model = AutoModelForMaskedLM.from_pretrained(
+            model_path, trust_remote_code=False, torch_dtype=torch.bfloat16,
+        ).to("cuda:0").eval()
+        prompt_ids = [
+            torch.tensor(tokenizer.encode(p, add_special_tokens=False), dtype=torch.long, device="cuda:0")
+            for p in generation_prompts
+        ]
+        all_outputs, all_token_lens = [""] * N, [0] * N
+        total_stats = SelfSpeculativeStats()
+        batch_size = min(int(config.rollout.get("max_active", 8)), 8)
+        progress = tqdm(
+            range(0, N, batch_size),
+            total=(N + batch_size - 1) // batch_size,
+            desc="Self-speculative",
+            unit="batch",
+            dynamic_ncols=True,
+        )
+        for start in progress:
+            batch = prompt_ids[start:start + batch_size]
+            generated_ids, batch_stats = cached_self_speculative_generate(
+                model, batch, max_new_tokens=max_new_tokens,
+                draft_block_size=draft_size, mask_id=tokenizer.mask_token_id,
+                eos_id=tokenizer.eos_token_id, pad_id=tokenizer.pad_token_id,
+                margin_threshold=margin_threshold,
+            )
+            if debug_compare:
+                reference_ids = causal_greedy(
+                    model, batch, max_new_tokens=max_new_tokens,
+                    eos_id=tokenizer.eos_token_id, pad_id=tokenizer.pad_token_id,
+                )
+                for offset, (actual, reference, prompt) in enumerate(zip(generated_ids, reference_ids, batch)):
+                    if not torch.equal(actual[prompt.numel():], reference[prompt.numel():]):
+                        raise AssertionError(
+                            f"self-speculative/causal mismatch at sample {start + offset}"
+                        )
+            for field in (
+                "accepted_draft_tokens", "proposed_draft_tokens", "sequence_iterations",
+                "blockwise_drafting_forwards", "blockwise_prefill_forwards",
+                "blockwise_cache_update_forwards", "causal_verification_forwards",
+                "causal_sequential_fallback_forwards",
+                "guarded_fallback_sequence_iterations",
+                "causal_prefill_forwards", "causal_correction_forwards",
+                "generated_tokens", "wall_clock_generation_seconds",
+            ):
+                setattr(total_stats, field, getattr(total_stats, field) + getattr(batch_stats, field))
+            for offset, (tokens, prompt) in enumerate(zip(generated_ids, batch)):
+                completion = tokens[prompt.numel():]
+                if tokenizer.eos_token_id is not None and completion.numel():
+                    eos = (completion == tokenizer.eos_token_id).nonzero(as_tuple=False)
+                    if eos.numel(): completion = completion[:int(eos[0, 0])]
+                all_outputs[start + offset] = tokenizer.decode(completion.tolist(), skip_special_tokens=False)
+                all_token_lens[start + offset] = tokens.numel() - prompt.numel()
+            live_metrics = total_stats.report()
+            progress.set_postfix(
+                prompts=f"{min(start + batch_size, N)}/{N}",
+                accept=f"{live_metrics['draft_token_acceptance_rate']:.3f}",
+                tok_fwd=f"{live_metrics['generated_tokens_per_total_forward_pass']:.3f}",
+                fallback=f"{live_metrics['guarded_fallback_rate']:.3f}",
+            )
+        metrics = total_stats.report()
+        cprint("Self-speculative metrics: " + json.dumps(metrics, sort_keys=True), "green")
+        if debug_compare:
+            cprint(f"Debug causal comparison passed for all {N} samples", "green")
+        for i, full_output in enumerate(all_outputs):
+            idx = index_list[i]
+            data[idx]["full_output"].append(full_output)
+            data[idx]["step_map"].append([])
+            data[idx]["extracted_output"].append(extract_answer(full_output, data_i=data[idx], ds_cfg=ds_cfg))
+            data[idx]["response_length"].append(all_token_lens[i])
+        output_file_name = "../" + project_name + "/temp_data/outputs-" + outputs_name + ".json"
+        metrics_file_name = "../" + project_name + "/results/self_speculative_metrics-" + outputs_name + ".json"
+        os.makedirs(os.path.dirname(output_file_name), exist_ok=True)
+        os.makedirs(os.path.dirname(metrics_file_name), exist_ok=True)
+        with open(output_file_name, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        with open(metrics_file_name, "w", encoding="utf-8") as f:
+            json.dump(metrics, f, indent=2)
+        cprint(f"Saved rollout outputs to {output_file_name}", "green")
+        raise SystemExit(0)
 
     # ══ JetEngine sampling ══
     cprint(f"  Using JetEngine (block_size={block_size_cfg})", "green")

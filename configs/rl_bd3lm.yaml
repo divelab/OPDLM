@@ -123,6 +123,16 @@ training:
         target_modules: ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
         bias: "none"               # "none" | "all" | "lora_only"
 
+# Optional Monte Carlo Target Concrete Score Matching correction. Candidate
+# support comes exclusively from training.top_k_logits.
+tcsm:
+    enabled: false
+    lambda_max: 1.0
+    ramp_steps: 0
+    ramp_type: "linear"
+    counterfactual_batch_size: 128
+    show_progress: false
+
 
 optimizer:
     name: adamw

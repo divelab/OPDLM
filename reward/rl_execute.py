@@ -233,9 +233,15 @@ def evaluate_evalplus_dataset(data: list[dict], evalplus_name: str,
     # that prompt silently deadlocks the parent (pipe buffer never drains).
     # Delete the stale file and feed /dev/null to stdin so any future prompt
     # errors out immediately instead of hanging.
-    stale_eval_json = sanitized_path.replace(".jsonl", ".eval_results.json")
-    if os.path.exists(stale_eval_json):
-        os.remove(stale_eval_json)
+    # EvalPlus releases have used both `.eval_results.json` and
+    # `_eval_results.json`; clear either stale form before evaluating.
+    eval_json_candidates = [
+        sanitized_path.replace(".jsonl", ".eval_results.json"),
+        sanitized_path.replace(".jsonl", "_eval_results.json"),
+    ]
+    for stale_eval_json in eval_json_candidates:
+        if os.path.exists(stale_eval_json):
+            os.remove(stale_eval_json)
     cprint(f"[evalplus] running: {' '.join(cmd)}", "cyan")
     with open(log_path, "a") as logf, open(os.devnull, "rb") as devnull:
         rc = subprocess.call(cmd, stdout=logf, stderr=subprocess.STDOUT,
@@ -245,10 +251,14 @@ def evaluate_evalplus_dataset(data: list[dict], evalplus_name: str,
             f"evalplus.evaluate failed (rc={rc}); log: {log_path}"
         )
 
-    eval_json = sanitized_path.replace(".jsonl", ".eval_results.json")
-    if not os.path.isfile(eval_json):
+    eval_json = next(
+        (path for path in eval_json_candidates if os.path.isfile(path)),
+        None,
+    )
+    if eval_json is None:
         raise RuntimeError(
-            f"evalplus did not produce {eval_json}. Log: {log_path}"
+            "evalplus did not produce a recognized eval-results file "
+            f"({eval_json_candidates}). Log: {log_path}"
         )
     with open(eval_json) as f:
         eval_data = json.load(f)
@@ -261,6 +271,18 @@ def evaluate_evalplus_dataset(data: list[dict], evalplus_name: str,
     pak = eval_data.get("pass_at_k", {}) or {}
     base_p1 = pak.get("base", {}).get("pass@1")
     plus_p1 = pak.get("plus", {}).get("pass@1")
+    # EvalPlus 0.3.1 prints pass@1 but omits `pass_at_k` from the JSON written
+    # by --i_just_wanna_run. With one greedy sample per task, pass@1 is simply
+    # the fraction of per-task rows whose status is `pass`.
+    if base_p1 is None or plus_p1 is None:
+        submitted_rows = [row for rows in per_task.values() for row in rows]
+        if submitted_rows:
+            base_p1 = sum(
+                row.get("base_status") == "pass" for row in submitted_rows
+            ) / len(submitted_rows)
+            plus_p1 = sum(
+                row.get("plus_status") == "pass" for row in submitted_rows
+            ) / len(submitted_rows)
     cprint(
         f"[evalplus] {evalplus_name}: base pass@1={base_p1}  plus pass@1={plus_p1}",
         "green",

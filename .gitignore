@@ -12,7 +12,8 @@ logs
 .venv/
 venv/
 env/
-
+.pip_cache/
+.triton*
 # Models (downloaded / checkpointed)
 pretrained_models/
 !pretrained_models/BD3LM/README.md
@@ -23,7 +24,7 @@ pretrained_models/
 *.pt
 *.pth
 *.ckpt
-
+diagnostics
 # Experiment outputs (checkpoints, rollout data, logs)
 experiments/
 rl_sdar/

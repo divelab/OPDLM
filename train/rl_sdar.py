@@ -37,6 +37,14 @@ from torch.utils.data import Dataset, DataLoader
 SYSTEM_PROMPT_LEN = 28
 
 from train.utils import get_config, flatten_omega_conf, AverageMeter
+from train.tcsm import (
+    compute_block_tcs_topk_scores,
+    full_target_forward_kl,
+    sample_disagreement_tcs_positions,
+    tcsm_lambda,
+    teacher_logprobs_from_logits,
+    token_tcsm_correction_per_row,
+)
 
 try:
     import apex
@@ -1250,7 +1258,32 @@ def main():
         num_forward_tokens = pad_mask.sum().item()
         return total_loss, loss_by_masking_rate, num_forward_tokens
 
-    def forward_process(extended_input_ids, p_mask, tok_idx_ext, labels, adv, logp_old_tok):
+    def _tcsm_training_masks(extended_input_ids):
+        prompt_response = extended_input_ids[:, :L0 + L1]
+        prompt = extended_input_ids[:, :L0]
+        response_noised = extended_input_ids[:, L0 + L1:]
+        prompt_mask = torch.cat(
+            [torch.zeros_like(prompt), torch.ones_like(response_noised)], dim=1
+        ).bool()
+        im_end_id = tokenizer.convert_tokens_to_ids("<|im_end|>")
+        is_response_im_end = prompt_response.eq(im_end_id) & prompt_mask
+        im_end_cumsum = is_response_im_end.cumsum(dim=1)
+        im_end_shifted = F.pad(im_end_cumsum[:, :-1], (1, 0))
+        im_end_mask = im_end_shifted.eq(0)
+        if getattr(config.training, "exclude_im_end", False):
+            im_end_mask = im_end_mask & ~is_response_im_end
+        prompt_noised_response = torch.cat([prompt, response_noised], dim=1)
+        response_mask = (
+            prompt_mask
+            & prompt_noised_response.ne(tokenizer.pad_token_id)
+            & im_end_mask
+        )
+        return response_mask, response_mask & prompt_noised_response.eq(tokenizer.mask_token_id)
+
+    def forward_process(
+        extended_input_ids, p_mask, tok_idx_ext, labels, adv, logp_old_tok,
+        tcsm_sample=None, tcsm_progress=None,
+    ):
 
         adv = torch.as_tensor(adv, device=extended_input_ids.device).detach()
 
@@ -1438,7 +1471,7 @@ def main():
         num_response_tokens = response_mask.sum(dim=1)
         # out_noised = tokenizer.decode(prompt_noised_response.flatten())
         # print(out_noised)
-        num_masked_tokens = (response_mask & masked_token_mask).sum(dim=1)
+        num_masked_tokens = loss_mask.sum(dim=1)
         frac_masked = num_masked_tokens.float() / num_response_tokens.float().clamp(min=1)
         loss_by_masking_rate = {}
         for frac, loss_i in zip(frac_masked, loss_unreduced):
@@ -1925,6 +1958,32 @@ def init_training(config):
     Must be called inside an `accelerate launch` distributed context.
     """
     wandb_enabled = bool(config.wandb.get("enabled", True))
+    _tcsm_cfg = config.get("tcsm", {})
+    if _tcsm_cfg.get("enabled", False):
+        if int(config.training.get("top_k_logits", 0)) <= 0:
+            raise ValueError("tcsm.enabled requires training.top_k_logits > 0")
+        if str(config.training.get("loss_type", "kl")) != "kl":
+            raise ValueError("tcsm.enabled currently requires training.loss_type=kl")
+        if float(config.training.get("reverse_kl_weight", 0.0)) != 0.0:
+            raise ValueError("tcsm.enabled requires training.reverse_kl_weight=0")
+        if str(config.training.get("teacher_fill", "argmax_fill")) != "clean_fill":
+            raise ValueError("tcsm.enabled requires training.teacher_fill=clean_fill")
+        if float(config.training.get("teacher_sampling_temperature", 1.0)) != 1.0:
+            raise ValueError("tcsm.enabled requires training.teacher_sampling_temperature=1.0")
+        if float(config.training.get("teacher_sampling_top_p", 1.0)) != 1.0:
+            raise ValueError("tcsm.enabled requires training.teacher_sampling_top_p=1.0")
+        if int(config.training.get("teacher_sampling_top_k", 0)) != 0:
+            raise ValueError("tcsm.enabled requires training.teacher_sampling_top_k=0")
+        if float(config.training.get("teacher_sampling_min_p", 0.0)) != 0.0:
+            raise ValueError("tcsm.enabled requires training.teacher_sampling_min_p=0.0")
+        if int(config.training.block_size) <= 1:
+            raise ValueError("tcsm.enabled requires training.block_size > 1")
+        if int(_tcsm_cfg.get("counterfactual_batch_size", 128)) <= 0:
+            raise ValueError("tcsm.counterfactual_batch_size must be positive")
+        if int(_tcsm_cfg.get("ramp_steps", 0)) < 0:
+            raise ValueError("tcsm.ramp_steps must be non-negative")
+        if float(_tcsm_cfg.get("lambda_max", 1.0)) < 0.0:
+            raise ValueError("tcsm.lambda_max must be non-negative")
     project_name = config.experiment.project
     _lora_enabled = getattr(getattr(config.training, "lora", None), "enabled", False)
     _lora_adapter_resume = None
@@ -2175,15 +2234,34 @@ def init_training(config):
     # Prepare teacher model
     _loss_type = getattr(config.training, "loss_type", "kl")
     if _loss_type in ("kl", "jsd"):
-        accelerator.state.select_deepspeed_plugin("teacher")
-        accelerator.state.deepspeed_plugin.deepspeed_config["train_micro_batch_size_per_gpu"] = 1
-        teacher_model = AutoModelForCausalLM.from_pretrained(
-            config.model.teacher_model, trust_remote_code=True, torch_dtype="auto"
-        )
-        teacher_model.requires_grad_(False)
-        teacher_model = accelerator.prepare(teacher_model)
+        if _tcsm_cfg.get("enabled", False):
+            # Counterfactual workloads differ by rank. Keep one frozen ARM copy
+            # per GPU so local candidate batches never enter ZeRO collectives.
+            from transformers.integrations.deepspeed import (
+                set_hf_deepspeed_config,
+                unset_hf_deepspeed_config,
+            )
+            student_hf_ds_config = accelerator.state.deepspeed_plugin.hf_ds_config
+            unset_hf_deepspeed_config()
+            try:
+                teacher_model = AutoModelForCausalLM.from_pretrained(
+                    config.model.teacher_model, trust_remote_code=True, torch_dtype="auto"
+                )
+            finally:
+                set_hf_deepspeed_config(student_hf_ds_config)
+            teacher_model.requires_grad_(False)
+            teacher_model.to(accelerator.device)
+            logger.info("MC-TCS: loaded an unsharded frozen ARM teacher on each rank")
+        else:
+            accelerator.state.select_deepspeed_plugin("teacher")
+            accelerator.state.deepspeed_plugin.deepspeed_config["train_micro_batch_size_per_gpu"] = 1
+            teacher_model = AutoModelForCausalLM.from_pretrained(
+                config.model.teacher_model, trust_remote_code=True, torch_dtype="auto"
+            )
+            teacher_model.requires_grad_(False)
+            teacher_model = accelerator.prepare(teacher_model)
+            accelerator.state.select_deepspeed_plugin("student")
         teacher_model.eval()
-        accelerator.state.select_deepspeed_plugin("student")
     else:
         teacher_model = None
         logger.info(f"{_loss_type} mode: skipping teacher model loading")
@@ -2624,7 +2702,31 @@ def train_one_step(state, config):
     # ── Forward process functions (closures over model, teacher, config, etc.) ──
     import torch.nn.functional as F
 
-    def forward_process(extended_input_ids, p_mask, tok_idx_ext, labels, adv, logp_old_tok):
+    def _tcsm_training_masks(extended_input_ids):
+        prompt_response = extended_input_ids[:, :L0 + L1]
+        prompt = extended_input_ids[:, :L0]
+        response_noised = extended_input_ids[:, L0 + L1:]
+        prompt_mask = torch.cat(
+            [torch.zeros_like(prompt), torch.ones_like(response_noised)], dim=1
+        ).bool()
+        im_end_id = tokenizer.convert_tokens_to_ids("<|im_end|>")
+        is_response_im_end = prompt_response.eq(im_end_id) & prompt_mask
+        im_end_cumsum = is_response_im_end.cumsum(dim=1)
+        im_end_shifted = F.pad(im_end_cumsum[:, :-1], (1, 0))
+        im_end_mask = im_end_shifted.eq(0)
+        if getattr(config.training, "exclude_im_end", False):
+            im_end_mask = im_end_mask & ~is_response_im_end
+        prompt_noised_response = torch.cat([prompt, response_noised], dim=1)
+        response_mask = (
+            prompt_mask
+            & prompt_noised_response.ne(tokenizer.pad_token_id)
+            & im_end_mask
+        )
+        return response_mask, response_mask & prompt_noised_response.eq(tokenizer.mask_token_id)
+
+    def forward_process(
+        extended_input_ids, p_mask, tok_idx_ext, labels, adv, logp_old_tok,
+    ):
         adv = torch.as_tensor(adv, device=extended_input_ids.device).detach()
         B, _L = p_mask.shape
         device = extended_input_ids.device
@@ -2761,45 +2863,110 @@ def train_one_step(state, config):
             else:
                 kl_div = forward_kl
 
-        prompt = extended_input_ids[:, :L0]
-        response_noised = extended_input_ids[:, L0 + L1:]
-        prompt_mask = torch.cat([torch.zeros_like(prompt), torch.ones_like(response_noised)], dim=1).bool()
-
-        # Cut loss off after the FIRST <|im_end|> in the response. Under
-        # dllm-style the response ends with <|im_end|> then is eos-padded with
-        # more <|im_end|>; the cut keeps the natural end-of-response token in
-        # the loss (so the model learns to stop) while excluding the eos-pad
-        # tail (which would otherwise over-train it on <|im_end|>).
-        im_end_id = tokenizer.convert_tokens_to_ids("<|im_end|>")
-        is_im_end = prompt_response.eq(im_end_id)
-        is_response_im_end = is_im_end & prompt_mask
-        im_end_cumsum = is_response_im_end.cumsum(dim=1)
-        im_end_shifted = F.pad(im_end_cumsum[:, :-1], (1, 0))
-        im_end_mask = im_end_shifted.eq(0)
-        if getattr(config.training, "exclude_im_end", False):
-            im_end_mask = im_end_mask & ~is_response_im_end
-
-        prompt_noised_response = torch.cat([prompt, response_noised], dim=1)
-        pad_mask_t = prompt_noised_response.ne(tokenizer.pad_token_id)
-        masked_token_mask = prompt_noised_response.eq(tokenizer.mask_token_id)
-        response_mask = prompt_mask & pad_mask_t & im_end_mask
-        loss_mask = response_mask & masked_token_mask
+        response_mask, loss_mask = _tcsm_training_masks(extended_input_ids)
         kl_div_mask = kl_div * loss_mask
         loss_unreduced = kl_div_mask.sum(dim=1) / loss_mask.sum(dim=1).clamp_min(1.0)
 
         num_response_tokens = response_mask.sum(dim=1)
-        num_masked_tokens = (response_mask & masked_token_mask).sum(dim=1)
+        num_masked_tokens = loss_mask.sum(dim=1)
         frac_masked = num_masked_tokens.float() / num_response_tokens.float().clamp(min=1)
         loss_by_masking_rate = {}
         for frac, loss_i in zip(frac_masked, loss_unreduced):
             metric_name = f"train/loss_masked_frac_{frac:.1f}"
             num_rate, total_loss = loss_by_masking_rate.get(metric_name, (0, 0))
             loss_by_masking_rate[metric_name] = (num_rate + 1, total_loss + loss_i.item())
-        loss = loss_unreduced.mean()
+        opd_loss = loss_unreduced.mean()
+        loss = opd_loss
+        tcsm_metrics = {}
+        _tcsm_cfg = config.get("tcsm", {})
+        if _tcsm_cfg.get("enabled", False):
+            lambda_t = tcsm_lambda(
+                current_epoch,
+                float(_tcsm_cfg.get("lambda_max", 1.0)),
+                int(_tcsm_cfg.get("ramp_steps", 0)),
+                str(_tcsm_cfg.get("ramp_type", "linear")),
+            )
+            correction = opd_loss.new_zeros(())
+            disagreement, tcs_loss_mask, selection_prob = sample_disagreement_tcs_positions(
+                arm_logits=logits_teacher,
+                dlm_logits=logits,
+                active_mask=loss_mask,
+            )
+            scores = None
+            if lambda_t != 0.0:
+                def _branch_logprobs(branch_logits):
+                    return teacher_logprobs_from_logits(branch_logits)
+
+                scores = compute_block_tcs_topk_scores(
+                    teacher_model=teacher_model,
+                    clean_input_ids=labels,
+                    position_ids=tok_idx_ext[:, :L0 + L1],
+                    teacher_logprobs=teacher_logprobs,
+                    loss_mask=tcs_loss_mask,
+                    sequence_ends=(
+                        torch.arange(L0 + L1, device=device).unsqueeze(0)
+                        .masked_fill(~response_mask, -1).max(dim=1).values + 1
+                    ),
+                    sample=None,
+                    response_start=L0,
+                    block_size=int(config.training.block_size),
+                    top_k=_top_k,
+                    counterfactual_batch_size=int(_tcsm_cfg.get("counterfactual_batch_size", 128)),
+                    logprob_fn=_branch_logprobs,
+                    pad_token_id=pad_id,
+                    show_progress=bool(_tcsm_cfg.get("show_progress", True)),
+                    is_main_process=accelerator.is_main_process,
+                    progress_bar=None,
+                )
+                if scores.row_indices.numel() > 0:
+                    # Bound the temporary [positions, vocab] gathers. The same
+                    # memory knob used for candidate branches controls this too.
+                    position_chunk_size = max(
+                        1,
+                        int(_tcsm_cfg.get("counterfactual_batch_size", 128)) // _top_k,
+                    )
+                    delta_chunks = []
+                    for chunk_start in range(
+                        0, scores.row_indices.numel(), position_chunk_size
+                    ):
+                        chunk_end = min(
+                            chunk_start + position_chunk_size,
+                            scores.row_indices.numel(),
+                        )
+                        chunk_rows = scores.row_indices[chunk_start:chunk_end]
+                        chunk_tokens = scores.token_indices[chunk_start:chunk_end]
+                        tcs_token_loss = full_target_forward_kl(
+                            student_logprobs=log_probs[chunk_rows, chunk_tokens],
+                            full_opd_logprobs=teacher_logprobs[chunk_rows, chunk_tokens],
+                            candidate_indices=scores.candidate_indices[chunk_start:chunk_end],
+                            tcs_topk_probs=scores.tcs_topk_probs[chunk_start:chunk_end],
+                        )
+                        historical_opd_token_loss = kl_div[chunk_rows, chunk_tokens]
+                        delta_chunks.append(tcs_token_loss - historical_opd_token_loss)
+                    token_deltas = torch.cat(delta_chunks)
+                    token_deltas = token_deltas / selection_prob[
+                        scores.row_indices, scores.token_indices
+                    ]
+                else:
+                    token_deltas = log_probs.new_empty(0)
+                correction = token_tcsm_correction_per_row(
+                    token_deltas=token_deltas,
+                    row_indices=scores.row_indices,
+                    active_counts=loss_mask.sum(dim=1),
+                    batch_size=B,
+                )
+                loss = opd_loss + lambda_t * correction
+
+            active_count = loss_mask.sum().clamp_min(1)
+            tcsm_metrics = {
+                "disagreement_rate": float(disagreement.sum().float().div(active_count).item()),
+                "tcs_coverage": float(tcs_loss_mask.sum().float().div(active_count).item()),
+                "tcs_correction": float(correction.detach().item()),
+            }
         # Count meaningful response tokens: through the natural <|im_end|>,
         # excluding the eos-pad tail (matches the loss-mask cutoff above).
         num_forward_tokens = response_mask.sum().item()
-        return loss, loss_by_masking_rate, num_forward_tokens
+        return loss, loss_by_masking_rate, num_forward_tokens, tcsm_metrics
 
     def forward_process_causal(extended_input_ids, p_mask, tok_idx_ext, labels, adv, logp_old_tok):
         B, _L = labels.shape
@@ -2891,7 +3058,7 @@ def train_one_step(state, config):
         # Count meaningful response tokens (the loss-mask region — response
         # area through first <|im_end|>, no eos-pad tail).
         num_forward_tokens = loss_mask.sum().item()
-        return loss, loss_by_masking_rate, num_forward_tokens
+        return loss, loss_by_masking_rate, num_forward_tokens, {}
 
     def forward_process_nll(extended_input_ids, p_mask, tok_idx_ext, labels, adv, logp_old_tok):
         # Pure SFT NLL on masked response positions. No teacher; ignores adv/logp_old_tok.
@@ -2950,7 +3117,7 @@ def train_one_step(state, config):
         # Count meaningful response tokens: through the natural <|im_end|>,
         # excluding the eos-pad tail (matches the loss-mask cutoff above).
         num_forward_tokens = response_mask.sum().item()
-        return loss, loss_by_masking_rate, num_forward_tokens
+        return loss, loss_by_masking_rate, num_forward_tokens, {}
 
     # ── Training loop ──
 
@@ -2971,6 +3138,7 @@ def train_one_step(state, config):
     from tqdm.auto import tqdm
 
     stepped = False
+    _tcsm_cfg = config.get("tcsm", {})
     for epoch in range(first_epoch, num_train_epochs):
         model.train()
         progress_bar = tqdm(
@@ -2999,13 +3167,16 @@ def train_one_step(state, config):
             else:
                 raise ValueError(f"Unknown loss_type: {_loss_type}")
 
-            loss_lm, loss_metrics, batch_loss_tokens = _fwd_fn(
+            _forward_kwargs = dict(
                 extended_input_ids=extended_input_ids_b,
                 p_mask=p_mask_b,
                 tok_idx_ext=tok_idx_ext_b,
                 labels=labels_b,
                 adv=reward_b,
                 logp_old_tok=old_lp,
+            )
+            loss_lm, loss_metrics, batch_loss_tokens, batch_tcsm_metrics = _fwd_fn(
+                **_forward_kwargs
             )
             _batch_loss_tokens_tensor = torch.tensor(batch_loss_tokens, device=accelerator.device)
             torch.distributed.all_reduce(_batch_loss_tokens_tensor, op=torch.distributed.ReduceOp.SUM)
@@ -3016,6 +3187,10 @@ def train_one_step(state, config):
                 loss_metric_value = loss_metric_value / loss_metric_ct
                 metrics[loss_metric_name].update(loss_metric_value, n=loss_metric_ct)
             avg_loss.update(loss_lm.item(), n=len(extended_input_ids_b))
+            for metric_name, metric_value in batch_tcsm_metrics.items():
+                if metric_name not in metrics:
+                    metrics[metric_name] = AverageMeter()
+                metrics[metric_name].update(metric_value)
 
             with accelerator.accumulate(model):
                 accelerator.backward(loss_lm)
@@ -3051,6 +3226,17 @@ def train_one_step(state, config):
                         all_counts = accelerator.gather(float2tensor(metrics[key].count if key in metrics else 0))
                         if all_counts.sum() > 0:
                             all_metrics[key] = all_sums.sum() / all_counts.sum()
+
+                    if config.get("tcsm", {}).get("enabled", False):
+                        for key in (
+                            "disagreement_rate", "tcs_coverage", "tcs_correction",
+                        ):
+                            local_sum = metrics[key].sum if key in metrics else 0.0
+                            local_count = metrics[key].count if key in metrics else 0
+                            gathered_sums = accelerator.gather(float2tensor(local_sum))
+                            gathered_counts = accelerator.gather(float2tensor(local_count))
+                            if gathered_counts.sum() > 0:
+                                all_metrics[key] = gathered_sums.sum() / gathered_counts.sum()
 
                     logged_metrics = {
                         "train/loss": all_avg.item(),

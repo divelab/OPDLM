@@ -333,6 +333,11 @@ DATASET_CONFIGS = {
         "dllm_max_new_tokens": 256,
         "dllm_steps_per_block": 32,
     },
+    "OpenThoughts3": {
+        "path": "OpenThoughts3.json",
+        "domain": None,
+        "prompt_template": None,
+    },
     # LMB-Hard (SDAR's actual reported split). Two variants:
     #   LiveMathBench_Hard       — en + cn merged (45 rows; matches SDAR's
     #     pipeline: their loader does `product(['hard'],['cn','en'])` → one

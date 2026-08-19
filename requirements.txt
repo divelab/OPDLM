@@ -1,25 +1,45 @@
-# OPDLM requirements — verified working on H100 nodes with NVIDIA driver
-# CUDA 12.8 (torch built for cu124, run with DS_SKIP_CUDA_CHECK=1 to bypass
-# DeepSpeed's nvcc major.minor mismatch check).
+# OPDLM requirements
 #
-# Install order (from a fresh conda env):
+# Target environment:
+#   Python 3.10
+#   NVIDIA H100 nodes
+#   CUDA toolkit / driver >= 12.6
+#   PyTorch 2.7.1 built for CUDA 12.6
+#
+# Install order from a fresh conda env:
+#
 #   conda create -n opdlm python=3.10.19 -y
 #   conda activate opdlm
-#   pip install torch==2.6.0+cu124 --index-url https://download.pytorch.org/whl/cu124
-#   pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cu124
-#   pip install flash-attn==2.7.4.post1 --no-build-isolation
 #
-# (flash-attn must be installed AFTER torch with --no-build-isolation; otherwise
-# it tries to install its own torch and the build pulls a wheel that mismatches
-# the env.)
+#   # Install build tooling
+#   uv pip install --upgrade setuptools wheel packaging ninja
+#
+#   # Install PyTorch separately first
+#   python -m pip install torch==2.7.1 \
+#       --index-url https://download.pytorch.org/whl/cu126
+#
+#   # Install OPDLM dependencies
+#   uv pip install -r requirements.txt
+#
+#   # Install flash-attn LAST, after torch is available
+#   uv pip install flash-attn==2.7.4.post1 --no-build-isolation
+#
+# flash-attn is intentionally NOT listed below because it must be built/
+# installed against the already-installed PyTorch environment.
+#
+# NOTE:
+# flash-attn 2.7.4.post1 predates PyTorch 2.7 and there have been reported
+# ABI/build issues with PyTorch >=2.7. If it fails to build/import, upgrade
+# flash-attn rather than downgrading arbitrary dependencies.
 
 # ── Core ML ──
-torch==2.6.0+cu124
-triton==3.2.0
-flash-attn==2.7.4.post1
-numpy==1.26.4              # vllm 0.8.x in turn pulls numba which caps numpy<2; pinning to 1.26 keeps everyone happy
+numpy==1.26.4
 scipy==1.15.3
 einops==0.8.2
+
+# torch and triton are intentionally not pinned here.
+# torch is installed explicitly before this file.
+# triton should be resolved consistently with the installed torch version.
 
 # ── Hugging Face ──
 transformers==4.52.4
@@ -38,7 +58,7 @@ bitsandbytes==0.49.2
 liger_kernel==0.7.0
 
 # ── Inference ──
-vllm==0.8.5.post1          # was 0.7.3 in the original spec; bumped because 0.7.3 force-downgrades torch to 2.5.1, breaking the cu124+flash-attn stack
+vllm==0.8.5.post1
 
 # ── Logging & config ──
 wandb==0.25.0
@@ -50,7 +70,7 @@ tqdm==4.67.3
 # ── Evaluation ──
 math_verify==0.9.0
 nest_asyncio==1.6.0
-evalplus==0.3.1            # required for HumanEval/MBPP scoring (rl_execute.evaluate_evalplus_dataset shells out to evalplus.sanitize / evalplus.evaluate). Note: pulls protobuf 5.x as a transitive dep.
+evalplus==0.3.1
 
 # ── Dev tools ──
 matplotlib==3.10.8

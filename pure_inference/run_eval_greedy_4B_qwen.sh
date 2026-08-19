@@ -113,6 +113,11 @@ MODEL_BASES=(
     "qwen"
     "qwen"
 )
+# Optional single-model override for scheduled baselines.
+if [ -n "${QWEN_MODEL:-}" ]; then
+    MODELS=("${QWEN_MODEL}")
+    MODEL_BASES=("qwen")
+fi
 
 # ══════════════════════════════════════════════════════════════════════
 # Datasets (must exist as data/{NAME}.json) + per-dataset max tokens
@@ -166,6 +171,20 @@ DATASETS=(
 # thinking logic
 DATASET_MAX_TOKENS=( $(printf '16000 %.0s' "${DATASETS[@]}") )
 
+# Optional comma-separated dataset override.  Use conservative limits for
+# the standard GSM8K/MATH500/code comparison when requested.
+if [ -n "${QWEN_DATASETS:-}" ]; then
+    IFS=',' read -r -a DATASETS <<< "${QWEN_DATASETS}"
+    DATASET_MAX_TOKENS=()
+    for _ds in "${DATASETS[@]}"; do
+        case "${_ds}" in
+            GSM8K|MATH500) DATASET_MAX_TOKENS+=(2000) ;;
+            HumanEval|MBPP) DATASET_MAX_TOKENS+=(1024) ;;
+            *) DATASET_MAX_TOKENS+=(2048) ;;
+        esac
+    done
+fi
+
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -187,7 +206,7 @@ MAX_ACTIVE=16
 TP=1
 BASE_PORT=17693
 OUT_DIR="pure_inference/results"
-TAG="greedy_Qwen"                 # subdir suffix: "greedy" or "sample"
+TAG="${QWEN_TAG:-greedy_Qwen}"    # subdir suffix: "greedy" or comparison tag
 
 # ══════════════════════════════════════════════════════════════════════
 # Multi-GPU data-parallel sharding (optional).

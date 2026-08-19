@@ -27,6 +27,10 @@ from eval_utils import DATASET_CONFIGS, reformat_choices, build_evalplus_prompt,
 # Per-sample `data_i["domain"]` > ds_cfg["domain"] > default "math".
 from domain_reward import extract_answer
 
+# Prompt protocol override for controlled cross-model comparisons.  The
+# default preserves the repository's EvalPlus assistant-prefill behavior.
+_prompt_style = os.environ.get("QWEN_PROMPT_STYLE", "idlm").lower()
+
 
 def get_config():
     cli_conf = OmegaConf.from_cli()
@@ -64,7 +68,19 @@ def get_prompt(data_i):
         #   - prompt_template (str / callable) → apply it (GSM8K, MATH500, MathBench, LMB-Hard, ...)
         #   - all None → pass question as-is
         if _ds_cfg.get("chat_style") == "evalplus_prefill":
-            return build_evalplus_prompt(data_i["question"], _tokenizer)
+            if _prompt_style == "idlm":
+                return build_evalplus_prompt(data_i["question"], _tokenizer)
+            content = (
+                "Please provide a self-contained Python script that solves the "
+                "following problem in a markdown code block:\n```\n"
+                f"{data_i['question'].strip()}\n```"
+            )
+            return _tokenizer.apply_chat_template(
+                [{"role": "user", "content": content}],
+                tokenize=False,
+                add_generation_prompt=True,
+                enable_thinking=_enable_thinking,
+            )
         if _ds_cfg.get("chat_style") == "lcb":
             # LCB: system message + pre-baked canonical user prompt; always
             # non-thinking (matches Qwen3 tech-report LCB numbers).

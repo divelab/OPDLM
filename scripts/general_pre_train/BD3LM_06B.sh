@@ -94,11 +94,10 @@ accelerate launch \
     evaluation.max_token=1000 \
     optimizer.params.learning_rate=1e-5 \
     max_token_schedule.end=4000 \
-    max_token_schedule.ramp_steps=100 \
+    max_token_schedule.ramp_steps=200 \
     model.pretrained_model=$STUDENT \
     model.teacher_model=$TEACHER \
     wandb.group=QwenARM0.6B_General \
     wandb.run_name=$RUN_NAME \
     training.one_state_per_block=True \
     dynamic_threshold_schedule.enabled=False \
-
